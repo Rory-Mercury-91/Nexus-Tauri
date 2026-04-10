@@ -1,0 +1,54 @@
+.file-pick-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.file-pick-field-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.file-pick-field-btn {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-light);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.file-pick-field-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface-light));
+  border-color: var(--primary);
+  color: var(--primary-light);
+}
+
+.file-pick-field-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.file-pick-field-name {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

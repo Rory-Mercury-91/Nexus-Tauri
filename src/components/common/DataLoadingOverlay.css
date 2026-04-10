@@ -1,0 +1,51 @@
+/* Overlay plein écran pendant la récupération des données Supabase */
+.data-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: color-mix(in srgb, var(--background) 88%, #000);
+  backdrop-filter: blur(6px);
+}
+
+.data-loading-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  max-width: 20rem;
+  text-align: center;
+}
+
+.data-loading-overlay-spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 3px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-top-color: var(--primary-light);
+  border-radius: 50%;
+  animation: data-loading-spin 0.75s linear infinite;
+}
+
+@keyframes data-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.data-loading-overlay-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.data-loading-overlay-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}

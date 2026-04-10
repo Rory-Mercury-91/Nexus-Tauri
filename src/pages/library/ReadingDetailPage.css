@@ -1,0 +1,580 @@
+.reading-detail-page {
+  padding-top: calc(var(--space-6) + 4.75rem);
+}
+
+.reading-detail-mock-topbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reading-overview-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.reading-overview-left {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.reading-overview-right {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.reading-overview-layout,
+.reading-overview-layout * {
+  box-sizing: border-box;
+}
+
+.reading-overview-right .anime-detail-subsection {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.reading-overview-right .anime-detail-info-card,
+.reading-overview-right .anime-detail-info-value,
+.reading-overview-right .anime-detail-prose,
+.reading-overview-right .anime-detail-tag {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reading-overview-right .anime-detail-info-grid {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.reading-overview-right .anime-detail-info-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reading-overview-right .anime-detail-info-label,
+.reading-overview-right .anime-detail-info-value {
+  display: block;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.reading-overview-right .anime-detail-prose,
+.reading-overview-right .anime-detail-subtitle,
+.reading-overview-right .anime-detail-title-link {
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.reading-overview-right .anime-detail-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.reading-overview-right .anime-detail-tag,
+.reading-overview-right .anime-detail-link-tag {
+  max-width: 100%;
+}
+
+.reading-overview-right .anime-detail-gallery-carousel {
+  overflow-x: auto;
+}
+
+@media (max-width: 980px) {
+  .reading-overview-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1120px) {
+  .reading-overview-right .anime-detail-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.reading-franchise-list {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.reading-costs-simple h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.reading-costs-simple p {
+  margin: 0 0 0.6rem;
+  color: var(--text);
+}
+
+.reading-costs-simple-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.reading-costs-simple-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.reading-collapse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.reading-personal-progress-wrap {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.reading-status-select-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.reading-status-select-inline select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+  padding: 0.35rem 0.5rem;
+}
+
+.reading-chapters-section h2,
+.reading-volumes-section h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.1rem;
+}
+
+.reading-chapters-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.reading-chapters-inline-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.reading-chapters-inline-form input {
+  width: 5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+}
+
+.reading-inline-check input {
+  width: auto;
+}
+
+.reading-volumes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: var(--space-3);
+}
+
+.reading-volumes-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.reading-bulk-toggles {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.anime-detail-action-btn-small {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.reading-volume-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-2);
+}
+
+.reading-volume-card {
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--background));
+  overflow: hidden;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.reading-volume-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px color-mix(in srgb, black 20%, transparent);
+}
+
+.reading-volume-card-head {
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 0.55rem;
+  background: var(--surface-light);
+}
+
+.reading-volume-card-head.is-read {
+  background: color-mix(in srgb, var(--success) 18%, var(--surface-light));
+}
+
+.reading-volume-card-head strong {
+  font-size: 0.98rem;
+}
+
+.reading-volume-inline-checks {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.reading-volume-inline-checks .nexus-toggle {
+  gap: 0.35rem;
+}
+
+.reading-volume-inline-checks .nexus-toggle-label {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.reading-volume-card-body {
+  display: grid;
+  grid-template-columns: clamp(120px, 15vw, 170px) 1fr;
+  gap: 0.9rem;
+  padding: 0.9rem;
+}
+
+.reading-volume-card-body img {
+  width: clamp(120px, 15vw, 170px);
+  height: clamp(168px, 21vw, 238px);
+  object-fit: contain;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.reading-volume-meta {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+}
+
+.reading-volume-meta-label {
+  margin: 0 0 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.reading-volume-price {
+  margin: 0;
+  color: var(--primary-light);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.reading-volume-meta-value {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.reading-edit-volume-thumb-placeholder {
+  width: 160px;
+  height: 230px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.reading-volume-card-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.reading-volumes-summary {
+  margin-bottom: 0;
+}
+
+.reading-costs-section h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.1rem;
+}
+
+.reading-costs-total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: var(--space-3);
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  background: color-mix(in srgb, var(--surface) 92%, var(--background));
+}
+
+.reading-costs-total span {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.reading-costs-total strong {
+  color: var(--primary-light);
+  font-size: 1rem;
+}
+
+.reading-costs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-2);
+}
+
+.reading-cost-card {
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 0.7rem;
+  background: color-mix(in srgb, var(--surface) 94%, var(--background));
+}
+
+.reading-cost-owner-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.reading-cost-owner-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 999px;
+}
+
+.reading-cost-owner-row strong {
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.reading-cost-amount {
+  margin: 0.45rem 0 0.15rem;
+  color: var(--primary-light);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.reading-cost-meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.reading-edit-volume-modal {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.reading-edit-volume-left {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+}
+
+.reading-edit-volume-left img {
+  width: 160px;
+  height: 230px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.reading-modal-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.reading-modal-field input,
+.reading-modal-field select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+  padding: 0.55rem 0.65rem;
+}
+
+.reading-edit-volume-right {
+  display: grid;
+  gap: 1rem;
+}
+
+.reading-edit-volume-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+
+.reading-span-2 {
+  grid-column: span 2;
+}
+
+.reading-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.reading-edit-volume-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.reading-edit-volume-toggles .nexus-toggle-label {
+  font-size: 0.82rem;
+}
+
+.reading-owner-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--background);
+}
+
+.reading-owner-list li {
+  display: inline-flex;
+  align-items: center;
+}
+
+.reading-owner-list li:not(:last-child)::after {
+  content: "-";
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+}
+
+.reading-owner-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reading-owner-main {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.55rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.reading-owner-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reading-sync-diff-head-actions {
+  display: flex;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.reading-sync-diff-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+}
+
+.reading-sync-diff-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--background));
+}
+
+.reading-sync-diff-row p {
+  margin: 0.3rem 0 0;
+  display: grid;
+  gap: 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 840px) {
+  .reading-edit-volume-modal {
+    grid-template-columns: 1fr;
+  }
+
+  .reading-edit-volume-left {
+    justify-items: start;
+  }
+}
+
+@media (max-width: 640px) {
+  .reading-overview-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .reading-volumes-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .reading-edit-volume-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reading-span-2 {
+    grid-column: auto;
+  }
+}

@@ -1,0 +1,22 @@
+---
+description: Styles Nexus-Tauri — tokens globaux et CSS par écran
+globs: "**/*.{css,tsx}"
+alwaysApply: false
+---
+
+# Feuilles de style
+
+## Fichier global des valeurs communes
+
+- Toutes les **variables de thème** (couleurs, rayons, espacements partagés) sont définies dans `src/styles/tokens.css` (et éventuellement complétées dans `src/styles/global.css` pour reset/scrollbar).
+- **Ne pas** disperser des couleurs en dur dans les composants si une variable existe ou doit exister dans `tokens.css`.
+
+## Un fichier CSS par fenêtre / écran / modale
+
+- Chaque page dans `src/pages/<Nom>/` a sa feuille **`NomPage.css`** (ou `<nom-kebab>.css`) importée **uniquement** par ce composant.
+- Chaque modale dans son dossier a **`NomModal.css`** importée **uniquement** par cette modale (et éventuellement un `AuthPanel.css` pour un sous-panneau réutilisé).
+- Les styles **partagés entre plusieurs écrans** restent dans `tokens.css` / `global.css`, pas dupliqués dans chaque feuille.
+
+## Cohérence visuelle
+
+- L’app suit le gabarit **Nexus** de référence (sidebar gauche, identité en tête de sidebar, actions fenêtre) : réutiliser les tokens `--primary`, `--surface`, `--background`, etc., alignés sur le projet `Nexus` (thème sombre par défaut).

@@ -1,0 +1,102 @@
+.sync-sidebar {
+  margin: 0 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-light) 70%, var(--surface));
+  overflow: hidden;
+}
+
+.sync-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.sync-sidebar-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-sidebar-mini-btn {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 94%, var(--background));
+  color: var(--text-secondary);
+  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sync-sidebar-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+.sync-sidebar-run {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.sync-sidebar-run-running,
+.sync-sidebar-run-queued {
+  color: var(--primary-light);
+}
+
+.sync-sidebar-run-completed {
+  color: var(--success);
+}
+
+.sync-sidebar-run-failed {
+  color: var(--error);
+}
+
+.sync-sidebar-stage {
+  display: grid;
+  gap: 4px;
+}
+
+.sync-sidebar-stage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.sync-sidebar-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-light) 85%, var(--background));
+  overflow: hidden;
+}
+
+.sync-sidebar-bar > div {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+}
+
+.sync-sidebar-stage small {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-sidebar-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--error);
+}

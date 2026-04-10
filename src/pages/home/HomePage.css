@@ -1,0 +1,488 @@
+/* Tableau de bord : cartes par personne + graphique mensuel */
+
+.home-page {
+  padding: var(--space-6);
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.home-page-header {
+  margin-bottom: var(--space-4);
+}
+
+.home-page-title {
+  margin: 0 0 var(--space-4);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.home-dash-placeholder {
+  margin: 0 0 var(--space-6);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.home-progress-section,
+.home-recent-section {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  margin-bottom: var(--space-4);
+}
+
+.home-section-container {
+  background: linear-gradient(135deg, var(--surface), var(--surface-light));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+}
+
+.home-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.home-progress-header {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.home-progress-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.home-panel-toggle {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--primary) 14%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 92%, var(--background));
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 2.2rem;
+  padding: 0.42rem var(--space-3);
+  margin-bottom: var(--space-3);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.home-panel-toggle:hover {
+  background: color-mix(in srgb, var(--surface-light) 72%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+  box-shadow: none;
+}
+
+.home-panel-toggle:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--primary) 65%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent);
+}
+
+.home-panel-toggle.is-collapsed {
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
+}
+
+.home-panel-chevron {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+.home-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.home-kpi-card {
+  background: var(--surface-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+  min-height: 7.5rem;
+  justify-content: center;
+}
+
+.home-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--shadow) 15%, transparent);
+}
+
+.home-kpi-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.home-kpi-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.home-kpi-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.home-kpi-sublabel {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+.home-kpi-double-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.home-kpi-double-value > div:not(:nth-child(2)) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 1;
+}
+
+.home-progress-block {
+  margin-bottom: 0;
+}
+
+.home-progress-block + .home-progress-block {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+
+.home-progress-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.home-progress-inline-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.home-progress-inline-icon {
+  font-size: 1.125rem;
+}
+
+.home-progress-inline-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.home-progress-inline-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.home-progress-inline-separator {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.home-progress-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.home-progress-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.home-progress-bar-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.home-progress-bar {
+  width: 100%;
+  height: 0.5rem;
+  border-radius: 4px;
+  background: var(--surface);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.home-progress-bar > div {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  transition: width 500ms ease;
+}
+
+.home-recent-carousel {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(140px, 160px);
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+  scroll-snap-type: x proximity;
+}
+
+.home-recent-carousel::-webkit-scrollbar {
+  height: 6px;
+}
+
+.home-recent-carousel::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--surface) 40%, var(--background));
+  border-radius: 3px;
+}
+
+.home-recent-carousel::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--primary) 50%, var(--border));
+  border-radius: 3px;
+}
+
+.home-recent-carousel::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+.home-recent-card {
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 92%, var(--background));
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+  min-height: 240px;
+  scroll-snap-align: start;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.home-recent-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--shadow) 15%, transparent);
+}
+
+.home-recent-image {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.home-recent-image-placeholder {
+  background: color-mix(in srgb, var(--surface) 75%, var(--background));
+}
+
+.home-recent-progress {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.15rem 0.4rem;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border-radius: var(--radius-sm);
+  width: fit-content;
+}
+
+.home-recent-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text);
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Cartes par propriétaire (ligne comme la capture) */
+.home-owner-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: 0;
+  align-items: stretch;
+}
+
+.home-owner-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-light);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 7.5rem;
+}
+
+.home-owner-card-total {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-light));
+}
+
+.home-owner-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.home-owner-card-avatar-wrap {
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+}
+
+.home-owner-card-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary-light);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-owner-card-name-total {
+  color: var(--warning);
+  font-size: 0.95rem;
+}
+
+.home-owner-card-main {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.home-owner-card-meta {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.home-owner-card-meta li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.home-owner-card-meta svg {
+  flex-shrink: 0;
+  color: var(--primary-light);
+}
+
+.home-owner-card-total .home-owner-card-meta svg {
+  color: var(--warning);
+}
+
+/* Graphique */
+.home-chart-section {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.home-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.home-chart-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.home-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.home-chart-toolbar-label {
+  display: flex;
+  align-items: center;
+}
+
+.home-chart-select {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.home-chart-select:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.home-chart-wrap {
+  width: 100%;
+  min-height: 320px;
+}
+
+.home-chart-hint {
+  margin: var(--space-3) 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}

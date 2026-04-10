@@ -1,0 +1,34 @@
+.library-personal-progress-wrap {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.library-favorite-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.library-favorite-heart-btn {
+  justify-self: start;
+  border: 1px solid color-mix(in srgb, #ef4444 45%, var(--border));
+  background: color-mix(in srgb, #ef4444 10%, var(--surface));
+  color: #f87171;
+  border-radius: 10px;
+  padding: 0.28rem 0.55rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.library-favorite-heart-btn.is-active {
+  background: color-mix(in srgb, #ef4444 24%, var(--surface));
+  color: #ef4444;
+}
+
+.library-favorite-heart-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

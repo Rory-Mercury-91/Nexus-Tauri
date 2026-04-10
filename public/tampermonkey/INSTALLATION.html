@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installation des Scripts Tampermonkey - Nexus-Tauri</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --primary-light: #818cf8;
+            --secondary: #ec4899;
+            --background: #0f172a;
+            --surface: #1e293b;
+            --surface-light: #334155;
+            --text: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border: #334155;
+            --success: #10b981;
+            --success-light: #34d399;
+            --warning: #f59e0b;
+            --warning-light: #fbbf24;
+            --error: #ef4444;
+            --error-light: #f87171;
+            --shadow: rgba(8, 15, 35, 0.55);
+            --card-shadow: 0 18px 38px rgba(8, 15, 35, 0.35);
+            --card-shadow-hover: 0 26px 48px rgba(8, 15, 35, 0.45);
+            --scrollbar-hover: #475569;
+            --modal-overlay: rgba(0, 0, 0, 0.7);
+            --modal-shadow: rgba(0, 0, 0, 0.5);
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--background);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .header h1 {
+            font-size: 2.8em;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -moz-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            -moz-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 15px;
+        }
+
+        .header p {
+            font-size: 1.3em;
+            color: var(--text-secondary);
+        }
+
+        .step {
+            background: var(--surface);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border);
+        }
+
+        .step-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .step-number {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.5em;
+            margin-right: 20px;
+            flex-shrink: 0;
+        }
+
+        .step h2 {
+            color: var(--text);
+            font-size: 1.6em;
+        }
+
+        .step-content {
+            color: var(--text-secondary);
+            line-height: 1.8;
+        }
+
+        .tampermonkey-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+            margin: 25px 0;
+        }
+
+        .tm-link {
+            display: block;
+            padding: 16px 24px;
+            background: var(--surface-light);
+            color: var(--text);
+            text-decoration: none;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 1.1em;
+            transition: all 0.3s;
+            border: 1px solid var(--border);
+        }
+
+        .tm-link:hover {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4);
+            border-color: var(--primary);
+        }
+
+        .scripts-category {
+            margin-bottom: 30px;
+        }
+
+        .scripts-category h3 {
+            color: var(--primary-light);
+            font-size: 1.4em;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .script-card {
+            background: var(--surface-light);
+            border-radius: 10px;
+            padding: 24px;
+            margin-bottom: 18px;
+            border: 1px solid var(--border);
+            transition: all 0.3s;
+        }
+
+        .script-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 16px rgba(99, 102, 241, 0.2);
+        }
+
+        .script-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .script-name {
+            font-weight: 600;
+            color: var(--text);
+            font-size: 1.2em;
+        }
+
+        .script-icon {
+            font-size: 1.8em;
+        }
+
+        .script-description {
+            color: var(--text-secondary);
+            font-size: 0.95em;
+            margin-bottom: 18px;
+            line-height: 1.6;
+        }
+
+        .install-button {
+            display: inline-block;
+            padding: 12px 28px;
+            background: linear-gradient(135deg, var(--success), #059669);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1.05em;
+            transition: all 0.3s;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .install-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+        }
+
+        .warning {
+            background: rgba(245, 158, 11, 0.15);
+            border-left: 4px solid var(--warning);
+            padding: 18px 24px;
+            border-radius: 8px;
+            margin: 25px 0;
+            color: var(--text);
+        }
+
+        .warning strong {
+            color: var(--warning);
+        }
+
+        .success {
+            background: rgba(16, 185, 129, 0.15);
+            border-left: 4px solid var(--success);
+            padding: 18px 24px;
+            border-radius: 8px;
+            margin: 25px 0;
+            color: var(--text);
+        }
+
+        .success strong {
+            color: var(--success);
+        }
+
+        .usage-list {
+            margin: 20px 0;
+            padding-left: 20px;
+        }
+
+        .usage-list li {
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .usage-list strong {
+            color: var(--text);
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 60px;
+            padding-top: 30px;
+            border-top: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .footer p {
+            margin: 8px 0;
+        }
+
+        .footer-title {
+            font-size: 1.1em;
+            color: var(--text);
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 12px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--background);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--surface-light);
+            border-radius: 6px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--scrollbar-hover);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎭 Script Tampermonkey</h1>
+            <p>Installation guidée pour Nexus-Tauri</p>
+        </div>
+
+        <!-- Étape 1 -->
+        <div class="step">
+            <div class="step-header">
+                <span class="step-number">1</span>
+                <h2>Installer Tampermonkey</h2>
+            </div>
+            <div class="step-content">
+                <p>Installez l'extension Tampermonkey pour votre navigateur :</p>
+                <div class="tampermonkey-links">
+                    <a href="https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank" class="tm-link">
+                        🌐 Chrome
+                    </a>
+                    <a href="https://addons.mozilla.org/fr/firefox/addon/tampermonkey/" target="_blank" class="tm-link">
+                        🦊 Firefox
+                    </a>
+                    <a href="https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd" target="_blank" class="tm-link">
+                        🔷 Edge
+                    </a>
+                    <a href="https://apps.apple.com/app/tampermonkey/id1482490089" target="_blank" class="tm-link">
+                        🍎 Safari
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Étape 2 -->
+        <div class="step">
+            <div class="step-header">
+                <span class="step-number">2</span>
+                <h2>Installer le script</h2>
+            </div>
+            <div class="step-content">
+                <p style="margin-bottom: 25px;">Cliquez sur "📥 Installer" pour le script :</p>
+
+                <div class="scripts-category">
+                    <h3>📦 Script disponible</h3>
+
+                    <div class="script-card">
+                        <div class="script-header">
+                            <span class="script-name">Nautiljon Extractor (Lectures VF)</span>
+                            <span class="script-icon">📚</span>
+                        </div>
+                        <div class="script-description">
+                            Extrait automatiquement les données des mangas et light novels depuis Nautiljon (édition française uniquement). 
+                            Récupère le titre, synopsis, genres, thèmes, métadonnées complètes et liste des volumes VF avec leurs dates de sortie. 
+                            Deux modes disponibles : Import complet (📚) pour créer une nouvelle entrée, ou Import tomes (📖) pour ajouter uniquement les volumes à une série existante.
+                        </div>
+                        <a href="Nautiljon Extractor.user.js" class="install-button" target="_blank">📥 Installer</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Avertissement -->
+        <div class="warning">
+            <strong>⚠️ Important :</strong> Nexus-Tauri doit être lancé pour que le script fonctionne (serveur d'import sur port 40000).
+        </div>
+
+        <div class="success">
+            <strong>✅ Astuce :</strong> Vous pouvez aussi glisser-déposer le fichier .user.js directement dans votre navigateur pour une installation encore plus rapide !
+        </div>
+
+        <!-- Étape 3 -->
+        <div class="step">
+            <div class="step-header">
+                <span class="step-number">3</span>
+                <h2>Vérifier l'installation</h2>
+            </div>
+            <div class="step-content">
+                <p style="margin-bottom: 15px;">Pour vérifier que le script est bien installé :</p>
+                <ul class="usage-list">
+                    <li>Cliquez sur l'icône <strong>Tampermonkey</strong> dans votre navigateur</li>
+                    <li>Sélectionnez <strong>"Tableau de bord"</strong></li>
+                    <li>Vous devriez voir le script <strong>"Nautiljon → Nexus-Tauri (Lectures VF)"</strong> dans la liste</li>
+                    <li>Assurez-vous que le script est <strong>activé</strong> (interrupteur vert à côté du script)</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Étape 4 -->
+        <div class="step">
+            <div class="step-header">
+                <span class="step-number">4</span>
+                <h2>Utiliser le script</h2>
+            </div>
+            <div class="step-content">
+                <p style="margin-bottom: 15px;">Le script s'active automatiquement sur les pages Nautiljon compatibles :</p>
+                <ul class="usage-list">
+                    <li>📚 <strong>Nautiljon (Mangas & Light Novels)</strong> : Deux boutons apparaissent en bas à gauche de la page</li>
+                    <li>📚 <strong>Import complet</strong> : Extrait toutes les données (titre, synopsis, métadonnées, volumes VF). Récupère automatiquement les dates de sortie en visitant chaque page de volume. Les données sont ensuite envoyées vers Nexus-Tauri où vous pourrez choisir vers quelle entrée de votre bibliothèque les importer.</li>
+                    <li>📖 <strong>Import tomes</strong> : Extrait uniquement la liste des volumes VF avec leurs dates de sortie. Utile pour mettre à jour une série déjà existante dans votre bibliothèque.</li>
+                    <li>🔍 <strong>Logs détaillés</strong> : Ouvrez la console du navigateur (F12) pour voir tous les détails de l'extraction en temps réel.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Étape 5 -->
+        <div class="step">
+            <div class="step-header">
+                <span class="step-number">5</span>
+                <h2>Finaliser l'import dans Nexus-Tauri</h2>
+            </div>
+            <div class="step-content">
+                <p style="margin-bottom: 15px;">Après avoir cliqué sur un bouton d'import sur Nautiljon :</p>
+                <ul class="usage-list">
+                    <li>⏳ Une notification apparaît sur Nautiljon confirmant l'envoi des données</li>
+                    <li>📥 <strong>Nexus-Tauri</strong> affiche automatiquement une modale de réception</li>
+                    <li>📋 La modale liste toutes vos fiches de lecture existantes</li>
+                    <li>🔍 Vous pouvez rechercher par titre ou ID MAL</li>
+                    <li>✅ Sélectionnez la fiche cible et cliquez sur <strong>"Appliquer l'import VF"</strong></li>
+                    <li>🎉 Les données Nautiljon sont fusionnées avec votre fiche et les volumes sont créés/mis à jour</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p class="footer-title">📚 Nexus-Tauri</p>
+            <p>Gestion de votre collection de lectures (mangas, light novels)</p>
+            <p style="margin-top: 15px; font-size: 0.9em;">Pour plus d'informations, consultez la documentation dans les Réglages de l'application</p>
+        </div>
+    </div>
+</body>
+</html>

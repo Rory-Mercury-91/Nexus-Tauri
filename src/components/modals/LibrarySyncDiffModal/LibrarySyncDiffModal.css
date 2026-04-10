@@ -1,0 +1,64 @@
+.library-sync-diff-head-actions {
+  display: flex;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.library-sync-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 0.9rem;
+}
+
+.library-sync-diff-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--background));
+}
+
+.library-sync-diff-card-body {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.library-sync-diff-values-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.library-sync-diff-value-col {
+  min-width: 0;
+}
+
+.library-sync-diff-value-label {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.library-sync-diff-value-col p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.82rem;
+  word-break: break-word;
+}
+
+.library-sync-diff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+@media (max-width: 900px) {
+  .library-sync-diff-grid {
+    grid-template-columns: 1fr;
+  }
+}

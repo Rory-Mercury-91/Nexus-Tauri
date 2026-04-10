@@ -1,0 +1,24 @@
+---
+description: Architecture Nexus-Tauri — séparation des responsabilités et structure des dossiers
+alwaysApply: true
+---
+
+# Architecture Nexus-Tauri
+
+## Dossiers : une page ou une modale par répertoire
+
+- Chaque **écran** (page route) vit dans `src/pages/<NomPage>/` avec au minimum `NomPage.tsx`.
+- Chaque **modale** vit dans `src/features/<domaine>/<NomModal>/` ou `src/components/modals/<NomModal>/` avec au minimum `NomModal.tsx` dans **son propre dossier** (pas de modales « génériques » mélangées à d’autres écrans dans le même dossier).
+
+## Logique métier vs rendu
+
+- **Interdit** : appels Supabase, parsing d’erreurs métier, règles d’upsert BDD, etc. directement dans le JSX des pages/modales.
+- **Obligatoire** : placer la logique dans `src/services/<domaine>/` (fonctions pures ou modules async), ou dans des **hooks** `src/hooks/` qui appellent ces services. Les composants ne font qu’orchestrer l’UI (état local de formulaire, affichage loading/erreur).
+
+## Imports
+
+- Préférer `@/` pour les chemins internes. Réutiliser l’existant dans `services/`, `hooks/`, `lib/` avant d’ajouter du code dupliqué.
+
+## Langue dans le code
+
+- Commentaires en **français** ; identifiants (variables, fonctions, types) en **anglais**.

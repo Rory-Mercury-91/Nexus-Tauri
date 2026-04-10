@@ -1,0 +1,36 @@
+/* Variables globales alignées sur le thème sombre du projet Nexus (référence). */
+:root {
+  --primary: #6366f1;
+  --primary-dark: #4f46e5;
+  --primary-light: #818cf8;
+  --secondary: #ec4899;
+  --background: #0f172a;
+  --surface: #1e293b;
+  --surface-light: #334155;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border: #334155;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --modal-overlay: rgba(0, 0, 0, 0.7);
+  --scrollbar-hover: #475569;
+
+  /* Alias hérités (composants existants) */
+  --color-bg: var(--background);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-secondary);
+  --color-accent: var(--primary);
+  --color-accent-hover: var(--primary-light);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --font-sans: "Segoe UI", Tahoma, Geneva, Verdana, system-ui, sans-serif;
+}

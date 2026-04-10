@@ -1,0 +1,58 @@
+.nautiljon-import-modal {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.nautiljon-import-lead {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.nautiljon-import-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--surface) 85%, black 15%);
+}
+
+.nautiljon-import-summary > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.nautiljon-import-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.nautiljon-import-targets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.nautiljon-import-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.nautiljon-import-input,
+.nautiljon-import-select {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--background);
+  color: var(--text);
+  padding: 0.6rem 0.7rem;
+}
+
+.nautiljon-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.2rem;
+}

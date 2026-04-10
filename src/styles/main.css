@@ -1,0 +1,3 @@
+/* Point d’entrée des styles : tokens globaux puis feuilles transverses. */
+@import "./tokens.css";
+@import "./global.css";

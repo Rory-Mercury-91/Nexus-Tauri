@@ -1,0 +1,150 @@
+/* Pages bibliothèque : collections, fiches, abonnements (squelette). */
+
+.library-page {
+
+  padding: var(--space-6);
+
+  max-width: 1100px;
+
+}
+
+
+
+.library-page-title {
+
+  margin: 0 0 var(--space-3);
+
+  font-size: 1.5rem;
+
+  font-weight: 600;
+
+  color: var(--text);
+
+}
+
+
+
+.library-page-lead {
+
+  margin: 0 0 var(--space-6);
+
+  color: var(--text-secondary);
+
+  font-size: 0.95rem;
+
+  max-width: 40rem;
+
+  line-height: 1.45;
+
+}
+
+
+
+.library-skeleton-block {
+
+  border: 1px dashed var(--border);
+
+  border-radius: var(--radius-sm);
+
+  background: color-mix(in srgb, var(--surface-light) 80%, var(--background));
+
+  min-height: 12rem;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  padding: var(--space-6);
+
+  color: var(--text-secondary);
+
+  font-size: 0.9rem;
+
+  text-align: center;
+
+}
+
+
+
+.library-back-link {
+
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: var(--space-2);
+
+  margin-bottom: var(--space-4);
+
+  font-size: 0.875rem;
+
+  color: var(--primary-light);
+
+  text-decoration: none;
+
+}
+
+
+
+.library-back-link:hover {
+
+  text-decoration: underline;
+
+  text-underline-offset: 2px;
+
+}
+
+
+
+.library-detail-meta {
+
+  margin: 0 0 var(--space-6);
+
+  font-size: 0.875rem;
+
+  color: var(--text-secondary);
+
+  font-family: ui-monospace, monospace;
+
+  word-break: break-all;
+
+}
+
+
+
+.library-demo-note {
+
+  margin: var(--space-4) 0 0;
+
+  font-size: 0.875rem;
+
+}
+
+.library-add-anime-btn {
+
+  padding: var(--space-2) var(--space-4);
+
+  font-size: 0.9rem;
+
+  font-weight: 500;
+
+  color: var(--text);
+
+  background: var(--primary);
+
+  border: none;
+
+  border-radius: var(--radius-sm);
+
+  cursor: pointer;
+
+}
+
+.library-add-anime-btn:hover {
+
+  background: var(--primary-dark);
+
+}
+

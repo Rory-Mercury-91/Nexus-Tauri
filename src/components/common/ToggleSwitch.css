@@ -1,0 +1,53 @@
+.nexus-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.nexus-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nexus-toggle-track {
+  width: 2.4rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  background: color-mix(in srgb, var(--surface-light) 84%, var(--background));
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.nexus-toggle-thumb {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.nexus-toggle input:checked + .nexus-toggle-track {
+  background: color-mix(in srgb, var(--primary) 35%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 65%, var(--border));
+}
+
+.nexus-toggle input:checked + .nexus-toggle-track .nexus-toggle-thumb {
+  transform: translateX(1.05rem);
+  background: var(--primary-light);
+}
+
+.nexus-toggle-label {
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+.nexus-toggle.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

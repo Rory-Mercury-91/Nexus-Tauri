@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 60" width="240" height="60">
+  <defs>
+    <!-- D�grad� horizontal (bleu cyan vers violet-rose) -->
+    <linearGradient id="nexusGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#06B6D4;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#60A5FA;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#A855F7;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Filtre pour le contour blanc �pais -->
+    <filter id="whiteOutline" x="-30%" y="-30%" width="160%" height="160%">
+      <feMorphology operator="dilate" radius="1.2" in="SourceAlpha" result="thicken"/>
+      <feFlood flood-color="white" flood-opacity="1" result="white"/>
+      <feComposite in="white" in2="thicken" operator="in" result="outline"/>
+      <feComposite in="SourceGraphic" in2="outline" operator="over"/>
+    </filter>
+    
+    <!-- Filtre pour le contour du texte -->
+    <filter id="textOutline" x="-30%" y="-30%" width="160%" height="160%">
+      <feMorphology operator="dilate" radius="1" in="SourceAlpha" result="thicken"/>
+      <feFlood flood-color="white" flood-opacity="1" result="white"/>
+      <feComposite in="white" in2="thicken" operator="in" result="outline"/>
+      <feComposite in="SourceGraphic" in2="outline" operator="over"/>
+    </filter>
+  </defs>
+  
+  <!-- Lettre N stylis�e plus grande avec d�grad� horizontal et contour �pais -->
+  <path 
+    d="M 6 6 L 6 54 L 22 54 L 22 28 L 40 54 L 56 54 L 56 6 L 40 6 L 40 32 L 22 6 Z" 
+    fill="url(#nexusGradient)" 
+    filter="url(#whiteOutline)"
+    stroke="white" 
+    stroke-width="1"
+    stroke-linejoin="round"
+  />
+  
+  <!-- Texte "exus" plus grand, plus �pais, avec d�grad� horizontal -->
+  <text 
+    x="68" 
+    y="44" 
+    font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" 
+    font-size="46" 
+    font-weight="900" 
+    fill="url(#nexusGradient)"
+    filter="url(#textOutline)"
+    style="letter-spacing: 1.2px;"
+  >
+    exus
+  </text>
+</svg>

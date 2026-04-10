@@ -1,0 +1,29 @@
+# Dépendances & build
+node_modules/
+dist/
+dist-ssr/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Éditeurs & OS
+.DS_Store
+Thumbs.db
+*.local
+
+# Variables d'environnement (jamais committer les secrets)
+.env
+.env.*
+!.env.example
+
+# Tauri / Rust
+src-tauri/target/
+
+# Dossier local : clés de signature updater, exports, brouillons sensibles (contenu ignoré, notice versionnée)
+Z_Dossier_Perso/*
+!Z_Dossier_Perso/README.md
+
+# Tauri signer (si généré à la racine par erreur)
+*.key
+*.key.pub

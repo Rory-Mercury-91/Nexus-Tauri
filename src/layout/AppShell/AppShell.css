@@ -1,0 +1,196 @@
+/* Coquille principale type Nexus : sidebar fixe + zone contenu. */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-shell-sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 260px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 24px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 100;
+}
+
+.app-shell-logo {
+  padding: 12px 24px;
+  margin-bottom: 8px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+}
+
+.app-shell-user-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.app-shell-user {
+  padding: 16px 24px;
+  margin: 0 16px 24px;
+  background: var(--surface-light);
+  border-left: 4px solid var(--primary);
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 80px;
+}
+
+.app-shell-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid var(--primary);
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-light);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.app-shell-user-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-shell-user-secondary {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-shell-user .app-shell-signout {
+  margin-top: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary-light);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.app-shell-user .app-shell-signout:hover {
+  color: var(--primary);
+}
+
+.app-shell-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 16px;
+}
+
+.app-shell-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-shell-nav-link:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--text);
+}
+
+.app-shell-nav-link-active {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary-light);
+}
+
+.app-shell-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  justify-content: center;
+}
+
+.app-shell-footer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex: 1;
+  min-height: 40px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.app-shell-footer-link {
+  text-decoration: none;
+}
+
+.app-shell-footer-link-active {
+  color: var(--primary-light);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border-color: var(--primary);
+}
+
+.app-shell-footer-btn:hover {
+  color: var(--primary-light);
+  border-color: var(--primary);
+}
+
+.app-shell-footer-btn-minimize {
+  border: none;
+  background: linear-gradient(135deg, var(--secondary), #3b82f6);
+  color: #fff;
+}
+
+.app-shell-footer-btn-minimize:hover {
+  filter: brightness(1.05);
+  color: #fff;
+}
+
+.app-shell-footer-btn-danger {
+  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  color: #f87171;
+}
+
+.app-shell-footer-btn-danger:hover {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.app-shell-main {
+  flex: 1;
+  margin-left: 260px;
+  min-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--background);
+}

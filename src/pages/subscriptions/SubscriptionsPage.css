@@ -1,0 +1,560 @@
+/* Pleine largeur de la zone principale (pas de max-width : évite la bande vide à droite). */
+.subscriptions-page {
+  padding: var(--space-6);
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.subscriptions-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.subscriptions-page-title {
+  margin: 0 0 var(--space-2);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.subscriptions-page-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.45;
+  max-width: 36rem;
+}
+
+.subscriptions-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.sub-btn-primary {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sub-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.sub-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sub-btn-secondary {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-light);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sub-btn-secondary:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary-light);
+}
+
+.sub-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.subscriptions-warn {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-4);
+}
+
+.subscriptions-error {
+  color: #f87171;
+  font-size: 0.875rem;
+  margin-bottom: var(--space-4);
+}
+
+.subscriptions-summary {
+  margin-bottom: var(--space-8);
+}
+
+.subscriptions-summary-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .subscriptions-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .subscriptions-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.subscriptions-summary-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-light);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Carte total achats : même colonne que les autres, segments sous le libellé */
+.subscriptions-summary-card-oneoff .subscriptions-segment {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.subscriptions-summary-card-oneoff .subscriptions-segment-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+}
+
+/* Titres des cartes de synthèse (h2 : plus visibles que l’ancien libellé secondaire) */
+.subscriptions-summary-card-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.subscriptions-recurring-toolbar {
+  margin-bottom: var(--space-4);
+}
+
+.subscriptions-oneoff-archive-banner {
+  margin: 0 0 var(--space-4);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.subscriptions-archive-toggle {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary-light);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.subscriptions-archive-toggle:hover {
+  color: var(--primary);
+}
+
+.subscriptions-summary-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.subscriptions-summary-hint {
+  margin: var(--space-4) 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  max-width: none;
+}
+
+.subscriptions-segment {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.subscriptions-segment-btn {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: var(--background);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.subscriptions-segment-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.subscriptions-segment-btn-active {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary-light);
+}
+
+.subscriptions-section {
+  margin-bottom: var(--space-8);
+}
+
+.subscriptions-section-title {
+  margin: 0 0 var(--space-4);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.subscriptions-empty {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Liste unifiée : abonnements récurrents + achats ponctuels (même fond, lignes compactes) */
+.subscriptions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* Largeur adaptée au contenu (pas de bandeau pleine page) ; reste limitée à la colonne sur petits écrans */
+.subscriptions-item-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-light);
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.subscriptions-item-main {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.subscriptions-item-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.subscriptions-rec-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.subscriptions-rec-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.subscriptions-item-field {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.subscriptions-item-field-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.subscriptions-item-field-value {
+  color: var(--text-secondary);
+}
+
+.subscriptions-item-field-muted {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.subscriptions-badge {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+}
+
+.subscriptions-badge-active {
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+  color: var(--success);
+}
+
+.subscriptions-badge-cancelled {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  color: #fca5a5;
+  border: 1px solid color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+.subscriptions-rec-price {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.subscriptions-rec-share {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.subscriptions-rec-dates {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.subscriptions-rec-owners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.subscriptions-rec-avatar {
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--border);
+}
+
+.subscriptions-rec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.subscriptions-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--primary-light);
+  cursor: pointer;
+}
+
+.subscriptions-icon-btn:hover {
+  border-color: var(--primary);
+}
+
+.subscriptions-icon-btn-danger {
+  color: #f87171;
+  border-color: color-mix(in srgb, #f87171 35%, var(--border));
+}
+
+.subscriptions-icon-btn-danger:hover {
+  background: color-mix(in srgb, #f87171 12%, transparent);
+}
+
+/* Modales (formulaires) */
+.sub-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* Grille 2 colonnes (écrans larges) : champs groupés logiquement */
+.sub-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+  align-items: start;
+}
+
+@media (min-width: 540px) {
+  .sub-modal-grid {
+    grid-template-columns: 1fr 1fr;
+    column-gap: var(--space-6);
+    row-gap: var(--space-5);
+  }
+
+  .sub-modal-field--full {
+    grid-column: 1 / -1;
+  }
+
+  /* Une seule colonne utile (ex. date de début en création) */
+  .sub-modal-field--single {
+    grid-column: 1 / 2;
+    max-width: 100%;
+  }
+}
+
+.sub-modal-error {
+  color: #fecaca;
+  font-size: 0.875rem;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f87171 14%, transparent);
+  border: 1px solid color-mix(in srgb, #f87171 35%, transparent);
+}
+
+.sub-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sub-modal-field label,
+.sub-modal-label-block {
+  display: block;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.sub-modal-field input[type="text"],
+.sub-modal-field input[type="date"],
+.sub-modal-field select,
+.sub-modal-field textarea {
+  width: 100%;
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--text);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.sub-modal-field textarea {
+  min-height: 5.5rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.sub-modal-input-mt {
+  margin-top: var(--space-1);
+}
+
+.sub-modal-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.sub-modal-owners {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.sub-modal-owners li {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sub-modal-owners li:not(:last-child)::after {
+  content: "-";
+  color: var(--text-secondary);
+  margin-left: var(--space-2);
+}
+
+.sub-modal-owner-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.sub-modal-owner-main {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.sub-modal-owner-main span {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-6);
+  border-top: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+}
+
+.sub-modal-actions .sub-btn-primary,
+.sub-modal-actions .sub-btn-secondary {
+  min-width: 8.5rem;
+  padding: var(--space-3) var(--space-4);
+}
