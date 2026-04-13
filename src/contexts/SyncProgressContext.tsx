@@ -11,6 +11,10 @@ import {
   type SyncProgressRow,
   type SyncSource,
 } from "@/services/library/syncService";
+import { useSyncProgressRealtime } from "@/hooks/useSyncProgressRealtime";
+
+const SYNC_POLL_ACTIVE_MS = 750;
+const SYNC_POLL_IDLE_MS = 10_000;
 
 type SyncProgressContextType = {
   activeRun: SyncRun | null;
@@ -36,20 +40,26 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const pollingRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
+  const pendingLoadRef = useRef(false);
 
   const load = useCallback(async () => {
     if (inFlightRef.current) {
+      pendingLoadRef.current = true;
       return;
     }
     inFlightRef.current = true;
     try {
-      const supabase = getSupabaseClient();
-      const status = await getAnimeSyncStatus(supabase);
-      setActiveRun(status.active_run);
-      setStages(status.active_progress);
-      setRecentRuns(status.recent_runs);
-      setError(null);
+      do {
+        pendingLoadRef.current = false;
+        const supabase = getSupabaseClient();
+        const status = await getAnimeSyncStatus(supabase);
+        setActiveRun(status.active_run);
+        setStages(status.active_progress);
+        setRecentRuns(status.recent_runs);
+        setError(null);
+      } while (pendingLoadRef.current);
     } catch (e) {
+      pendingLoadRef.current = false;
       const message = e instanceof Error ? e.message : "Erreur synchronisation.";
       setError(message);
       appendClientLog("error", "sync.anime.status", message);
@@ -110,6 +120,11 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
     void load();
   }, [load]);
 
+  const syncActive = Boolean(
+    activeRun && (activeRun.status === "queued" || activeRun.status === "running")
+  );
+  useSyncProgressRealtime("anime", syncActive, load);
+
   useEffect(() => {
     if (pollingRef.current) {
       window.clearInterval(pollingRef.current);
@@ -122,7 +137,7 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
         await tickAnimeSyncWorker(supabase).catch(() => undefined);
       }
       await load();
-    }, activeRun ? 3000 : 10000);
+    }, activeRun ? SYNC_POLL_ACTIVE_MS : SYNC_POLL_IDLE_MS);
     return () => {
       if (pollingRef.current) {
         window.clearInterval(pollingRef.current);

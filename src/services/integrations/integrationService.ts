@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { invokeEdgeFunction } from "@/services/supabase/edgeFunctionInvoke";
 
 export type IntegrationProvider = "mal" | "anilist";
 
@@ -70,37 +71,29 @@ export async function fetchIntegrationStatus(
 ): Promise<
   { ok: true; status: IntegrationConnectionStatus } | { ok: false; error: string }
 > {
-  const headers = await getInvokeAuthHeaders(supabase);
-  if (!headers) {
+  try {
+    const payload = await invokeEdgeFunction<StatusFunctionResponse>(
+      supabase,
+      "integration-connection-status",
+      { provider }
+    );
     return {
-      ok: false,
-      error: "Session utilisateur invalide. Reconnecte-toi puis réessaie.",
+      ok: true,
+      status: {
+        connected: Boolean(payload.connected),
+        accountLabel: payload.account_label ?? payload.accountLabel ?? null,
+        expiresAt: payload.expires_at ?? payload.expiresAt ?? null,
+      },
     };
-  }
-  const { data, error } = await supabase.functions.invoke(
-    "integration-connection-status",
-    {
-      body: { provider },
-      headers,
-    }
-  );
-  if (error) {
+  } catch (e) {
     return {
       ok: false,
       error:
-        error.message ||
-        `Impossible de récupérer le statut de connexion (${provider}).`,
+        e instanceof Error
+          ? e.message
+          : `Impossible de récupérer le statut de connexion (${provider}).`,
     };
   }
-  const payload = (data ?? {}) as StatusFunctionResponse;
-  return {
-    ok: true,
-    status: {
-      connected: Boolean(payload.connected),
-      accountLabel: payload.account_label ?? payload.accountLabel ?? null,
-      expiresAt: payload.expires_at ?? payload.expiresAt ?? null,
-    },
-  };
 }
 
 /**
@@ -110,38 +103,30 @@ export async function startIntegrationConnect(
   supabase: SupabaseClient,
   provider: IntegrationProvider
 ): Promise<{ ok: true; authUrl: string } | { ok: false; error: string }> {
-  const headers = await getInvokeAuthHeaders(supabase);
-  if (!headers) {
-    return {
-      ok: false,
-      error: "Session utilisateur invalide. Reconnecte-toi puis réessaie.",
-    };
-  }
-  const { data, error } = await supabase.functions.invoke(
-    "integration-start-connect",
-    {
-      body: { provider },
-      headers,
+  try {
+    const payload = await invokeEdgeFunction<StartConnectFunctionResponse>(
+      supabase,
+      "integration-start-connect",
+      { provider }
+    );
+    const authUrl = payload.auth_url ?? payload.authUrl ?? "";
+    if (!authUrl) {
+      return {
+        ok: false,
+        error:
+          "La fonction backend n’a pas renvoyé d’URL d’autorisation. Vérifie la configuration Edge Functions.",
+      };
     }
-  );
-  if (error) {
+    return { ok: true, authUrl };
+  } catch (e) {
     return {
       ok: false,
       error:
-        error.message ||
-        `Impossible de démarrer la connexion OAuth (${provider}).`,
+        e instanceof Error
+          ? e.message
+          : `Impossible de démarrer la connexion OAuth (${provider}).`,
     };
   }
-  const payload = (data ?? {}) as StartConnectFunctionResponse;
-  const authUrl = payload.auth_url ?? payload.authUrl ?? "";
-  if (!authUrl) {
-    return {
-      ok: false,
-      error:
-        "La fonction backend n’a pas renvoyé d’URL d’autorisation. Vérifie la configuration Edge Functions.",
-    };
-  }
-  return { ok: true, authUrl };
 }
 
 /**
@@ -151,23 +136,16 @@ export async function disconnectIntegration(
   supabase: SupabaseClient,
   provider: IntegrationProvider
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const headers = await getInvokeAuthHeaders(supabase);
-  if (!headers) {
-    return {
-      ok: false,
-      error: "Session utilisateur invalide. Reconnecte-toi puis réessaie.",
-    };
-  }
-  const { error } = await supabase.functions.invoke("integration-disconnect", {
-    body: { provider },
-    headers,
-  });
-  if (error) {
+  try {
+    await invokeEdgeFunction(supabase, "integration-disconnect", { provider });
+    return { ok: true };
+  } catch (e) {
     return {
       ok: false,
       error:
-        error.message || `Impossible de déconnecter l’intégration (${provider}).`,
+        e instanceof Error
+          ? e.message
+          : `Impossible de déconnecter l’intégration (${provider}).`,
     };
   }
-  return { ok: true };
 }

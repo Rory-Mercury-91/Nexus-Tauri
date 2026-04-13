@@ -5,6 +5,10 @@ import { getSupabaseClient } from "@/lib/supabaseClient";
 import { buildAnimeDetailResolvedFields } from "@/services/library/animeDetailViewModel";
 import { updateAnimeWatchStatus } from "@/services/library/animeCollectionService";
 import { deleteAnimeEntry } from "@/services/library/animeCollectionService";
+import { removeFromExternalList } from "@/services/library/externalReadingListDeleteService";
+import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
+import { DeleteLibraryEntryConfirmModal } from "@/features/library/DeleteLibraryEntryConfirmModal/DeleteLibraryEntryConfirmModal";
+import { isMalSyntheticId } from "@/lib/malSyntheticIds";
 import { translateLibraryTerm } from "@/services/library/termTranslations";
 import { type SyncSource } from "@/services/library/syncService";
 import { buildAnimeSyncDiffFields } from "@/services/library/syncDiffService";
@@ -13,6 +17,7 @@ import type { JikanAnimeFull } from "@/services/jikan/jikanTypes";
 import { useSyncProgress } from "@/contexts/SyncProgressContext";
 import { notifyToast } from "@/lib/toastEvents";
 import { downloadImageToDownloads } from "@/lib/imageDownload";
+import { downloadJsonFile, isDebugModeEnabled } from "@/lib/debugTools";
 import { LibraryMediaGallery } from "@/components/library/LibraryMediaGallery";
 import { LibraryMediaPreviewModal } from "@/components/library/LibraryMediaPreviewModal";
 import { LibraryFranchiseSection } from "@/components/library/LibraryFranchiseSection";
@@ -412,6 +417,9 @@ function AnimeDetailBody({
   const [favoriteSaving, setFavoriteSaving] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [integrationConnected, setIntegrationConnected] = useState({ mal: false, anilist: false });
+  const [exportingDebugJson, setExportingDebugJson] = useState(false);
   useEffect(() => {
     setDraft((prev) => ({
       ...prev,
@@ -469,6 +477,45 @@ function AnimeDetailBody({
     watchStatus,
     isFavorite,
   ]);
+
+  const malIdForRemote = useMemo(() => {
+    const parsed = Number(String(draft.malId ?? "").trim());
+    const n = Number.isFinite(parsed) && parsed > 0 ? parsed : Number(anime.mal_id);
+    if (!Number.isFinite(n) || n <= 0) {
+      return null;
+    }
+    if (isMalSyntheticId(n)) {
+      return null;
+    }
+    return n;
+  }, [draft.malId, anime.mal_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const supabase = getSupabaseClient();
+        const [malStatus, aniStatus] = await Promise.all([
+          fetchIntegrationStatus(supabase, "mal"),
+          fetchIntegrationStatus(supabase, "anilist"),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setIntegrationConnected({
+          mal: malStatus.ok && malStatus.status.connected,
+          anilist: aniStatus.ok && aniStatus.status.connected,
+        });
+      } catch {
+        if (!cancelled) {
+          setIntegrationConnected({ mal: false, anilist: false });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function updateDraft<K extends keyof typeof draft>(key: K, value: (typeof draft)[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -777,19 +824,45 @@ function AnimeDetailBody({
     notifyToast({ kind: "error", message: result.error });
   }
 
-  async function deleteCurrentAnimeEntry() {
+  function openDeleteAnimeModal() {
     if (deleting) {
       return;
     }
-    const confirmed = window.confirm("Supprimer cette fiche animé locale ?");
-    if (!confirmed) {
+    setDeleteModalOpen(true);
+  }
+
+  async function confirmDeleteAnime(opts: { removeMal: boolean; removeAnilist: boolean }) {
+    if (deleting) {
       return;
     }
     setDeleting(true);
     try {
       const supabase = getSupabaseClient();
+      if (opts.removeMal && malIdForRemote) {
+        const r = await removeFromExternalList(supabase, {
+          provider: "mal",
+          malMediaId: malIdForRemote,
+          catalog: "anime",
+        });
+        if (!r.ok) {
+          notifyToast({ kind: "error", message: r.error });
+          return;
+        }
+      }
+      if (opts.removeAnilist && malIdForRemote) {
+        const r = await removeFromExternalList(supabase, {
+          provider: "anilist",
+          malMediaId: malIdForRemote,
+          catalog: "anime",
+        });
+        if (!r.ok) {
+          notifyToast({ kind: "error", message: r.error });
+          return;
+        }
+      }
       await deleteAnimeEntry(supabase, rowId);
       notifyToast({ kind: "success", message: "Fiche supprimée." });
+      setDeleteModalOpen(false);
       onDeleted();
     } catch (error) {
       notifyToast({
@@ -798,6 +871,75 @@ function AnimeDetailBody({
       });
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function exportDebugPayload() {
+    if (exportingDebugJson) {
+      return;
+    }
+    setExportingDebugJson(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id ?? null;
+      const animeMalId = Number(anime.mal_id);
+      const [animeById, animeByMal, readingLinks] = await Promise.all([
+        supabase.from("library_anime").select("*").eq("id", rowId).maybeSingle(),
+        supabase.from("library_anime").select("*").eq("mal_id", animeMalId),
+        supabase
+          .from("library_reading")
+          .select("id, mal_manga_id, title, read_status, updated_at, mal_official_snapshot, jikan_snapshot"),
+      ]);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        app: "Nexus-Tauri",
+        entity: {
+          media: "anime",
+          mal_id: animeMalId,
+          anime_row_id: rowId,
+        },
+        context: {
+          user_id: userId,
+          url_path: window.location.pathname,
+          debug_mode_enabled: isDebugModeEnabled(),
+        },
+        local_state: {
+          report,
+          resolved,
+          draft,
+          watch_status: watchStatus,
+          is_favorite: isFavorite,
+          franchise_entries: franchiseEntries,
+          seen_episode_ids: seenEpisodeIds,
+          live_sync_full: liveSyncFull,
+        },
+        supabase: {
+          anime_by_id: animeById.data ?? null,
+          anime_by_mal_all_rows: animeByMal.data ?? [],
+          reading_rows_context: readingLinks.data ?? [],
+          errors: {
+            anime_by_id: animeById.error?.message ?? null,
+            anime_by_mal: animeByMal.error?.message ?? null,
+            reading_rows_context: readingLinks.error?.message ?? null,
+          },
+        },
+      };
+
+      const safeTitle = String(draft.titleFr || resolved.title || `anime-${animeMalId}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]+/g, "-")
+        .slice(0, 60);
+      downloadJsonFile(`debug-anime-${animeMalId}-${safeTitle}.json`, payload);
+      notifyToast({ kind: "success", message: "Export JSON debug généré." });
+    } catch (error) {
+      notifyToast({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Export debug impossible.",
+      });
+    } finally {
+      setExportingDebugJson(false);
     }
   }
 
@@ -810,7 +952,11 @@ function AnimeDetailBody({
         onSync={() => void openSyncDiffModal()}
         onEdit={() => setIsEditModalOpen(true)}
         onRefresh={() => window.location.reload()}
-        onDelete={() => void deleteCurrentAnimeEntry()}
+        onExportJson={
+          isDebugModeEnabled() ? () => void exportDebugPayload() : undefined
+        }
+        exportBusy={exportingDebugJson}
+        onDelete={() => openDeleteAnimeModal()}
         deleting={deleting}
         editLabel="Modifier la fiche"
         syncTitle="Relancer la synchronisation MAL pour cette fiche"
@@ -981,6 +1127,18 @@ function AnimeDetailBody({
         images={previewImages}
         startIndex={previewIndex ?? 0}
         onClose={() => setPreviewIndex(null)}
+      />
+
+      <DeleteLibraryEntryConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        entryTitle={draft.titleFr || resolved.title || ""}
+        kind="anime"
+        malMediaId={malIdForRemote}
+        oauthMalConnected={integrationConnected.mal}
+        oauthAnilistConnected={integrationConnected.anilist}
+        busy={deleting}
+        onConfirm={(opts) => void confirmDeleteAnime(opts)}
       />
 
       <LibrarySyncDiffModal

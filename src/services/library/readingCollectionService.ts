@@ -1,4 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  coalesceFirstFiniteNumber,
+  extractNumChaptersReadFromMalOfficialSnapshot,
+  mergeReadingProgressBySource,
+  resolveCanonicalReadStatus,
+} from "@/services/library/readingProgressResolution";
 import { translateLibraryTerms } from "@/services/library/termTranslations";
 import { listFamilyVisibleProfiles } from "@/services/family/familyService";
 
@@ -29,6 +35,7 @@ export type ReadingCollectionEntry = {
   preferMihonProgress: boolean;
   mihonUsers: string[];
   mihonUserBadges: Array<{ name: string; avatarPath: string | null }>;
+  mihonSources: string[];
   hasMihonInFamily: boolean;
 };
 
@@ -163,6 +170,7 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       chaptersRead: number;
       chaptersTotal: number;
       preferMihonProgress: boolean;
+      sourceId: string;
     }>
   >();
   
@@ -171,37 +179,20 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
     for (let i = 0; i < readingIds.length; i += BATCH_SIZE) {
       const batch = readingIds.slice(i, i + BATCH_SIZE);
       const { data: volumesData } = await supabase
-        .from("reading_volumes")
-        .select("reading_id, is_read, reading_volume_owners(user_id)")
+        .from("user_manga_volume_state")
+        .select("reading_id, is_read")
         .in("reading_id", batch);
-      
-      type VolumeOwnerRow = { user_id?: string | null };
-      type VolumeRow = {
+
+      type StateRow = {
         reading_id?: string | null;
         is_read?: boolean | null;
-        reading_volume_owners?: VolumeOwnerRow[] | null;
       };
       (volumesData ?? []).forEach((vol) => {
-        const typedVol = vol as VolumeRow;
+        const typedVol = vol as StateRow;
         const readingId = String(typedVol.reading_id ?? "");
         if (!readingId) {
           return;
         }
-        
-        // Stocker les propriétaires
-        if (!volumeOwnersMap.has(readingId)) {
-          volumeOwnersMap.set(readingId, new Set());
-        }
-        const owners = Array.isArray(typedVol.reading_volume_owners)
-          ? typedVol.reading_volume_owners
-          : [];
-        owners.forEach((owner) => {
-          if (owner.user_id) {
-            volumeOwnersMap.get(readingId)!.add(owner.user_id);
-          }
-        });
-        
-        // Stocker les volumes pour calculer les volumes lus
         if (!volumesByReadingId.has(readingId)) {
           volumesByReadingId.set(readingId, []);
         }
@@ -209,11 +200,75 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       });
     }
 
+    const malIds = Array.from(
+      new Set(
+        rows
+          .map((r) => Number((r as { mal_manga_id?: unknown }).mal_manga_id ?? 0))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      )
+    );
+    const catalogIdToMal = new Map<string, number>();
+    if (malIds.length > 0) {
+      for (let i = 0; i < malIds.length; i += BATCH_SIZE) {
+        const batch = malIds.slice(i, i + BATCH_SIZE);
+        const { data: catRows } = await supabase
+          .from("library_manga_volume_catalog")
+          .select("id, mal_manga_id")
+          .in("mal_manga_id", batch);
+        (catRows ?? []).forEach((c) => {
+          const row = c as { id?: string | null; mal_manga_id?: number | null };
+          const id = String(row.id ?? "").trim();
+          const mal = Number(row.mal_manga_id ?? 0);
+          if (id && Number.isFinite(mal) && mal > 0) {
+            catalogIdToMal.set(id, mal);
+          }
+        });
+      }
+    }
+
+    const readingsByMal = new Map<number, string[]>();
+    for (const r of rows) {
+      const rid = String((r as { id?: unknown }).id ?? "");
+      const mal = Number((r as { mal_manga_id?: unknown }).mal_manga_id ?? 0);
+      if (!rid || !Number.isFinite(mal) || mal <= 0) continue;
+      if (!readingsByMal.has(mal)) readingsByMal.set(mal, []);
+      readingsByMal.get(mal)!.push(rid);
+    }
+
+    const catalogIds = [...catalogIdToMal.keys()];
+    if (familyIds.length > 0 && catalogIds.length > 0) {
+      for (let i = 0; i < catalogIds.length; i += BATCH_SIZE) {
+        const batch = catalogIds.slice(i, i + BATCH_SIZE);
+        const { data: ownRows } = await supabase
+          .from("family_manga_volume_owner")
+          .select("catalog_volume_id, user_id")
+          .in("family_id", familyIds)
+          .in("catalog_volume_id", batch);
+        (ownRows ?? []).forEach((o) => {
+          const row = o as { catalog_volume_id?: string | null; user_id?: string | null };
+          const cid = String(row.catalog_volume_id ?? "").trim();
+          const uid = String(row.user_id ?? "").trim();
+          if (!cid || !uid) return;
+          const mal = catalogIdToMal.get(cid);
+          if (mal === undefined) return;
+          const targetReadings = readingsByMal.get(mal) ?? [];
+          for (const readingId of targetReadings) {
+            if (!volumeOwnersMap.has(readingId)) {
+              volumeOwnersMap.set(readingId, new Set());
+            }
+            volumeOwnersMap.get(readingId)!.add(uid);
+          }
+        });
+      }
+    }
+
     for (let i = 0; i < readingIds.length; i += BATCH_SIZE) {
       const batch = readingIds.slice(i, i + BATCH_SIZE);
       const { data: mihonData } = await supabase
         .from("reading_mihon_presence")
-        .select("reading_id, user_id, chapters_read, chapters_total, prefer_mihon_progress")
+        .select(
+          "reading_id, user_id, chapters_read, chapters_total, prefer_mihon_progress, source_id"
+        )
         .in("reading_id", batch);
 
       type MihonPresenceRow = {
@@ -222,6 +277,7 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
         chapters_read?: number | null;
         chapters_total?: number | null;
         prefer_mihon_progress?: boolean | null;
+        source_id?: string | null;
       };
       (mihonData ?? []).forEach((row) => {
         const typedRow = row as MihonPresenceRow;
@@ -235,9 +291,31 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
           chaptersRead: Number(typedRow.chapters_read ?? 0),
           chaptersTotal: Number(typedRow.chapters_total ?? 0),
           preferMihonProgress: Boolean(typedRow.prefer_mihon_progress ?? true),
+          sourceId: String(typedRow.source_id ?? "").trim(),
         });
       });
     }
+  }
+  const mihonSourceIds = Array.from(
+    new Set(
+      Array.from(mihonPresenceByReadingId.values())
+        .flat()
+        .map((entry) => String((entry as { sourceId?: string }).sourceId ?? "").trim())
+        .filter((id) => id.length > 0)
+    )
+  );
+  const sourceNameById = new Map<string, string>();
+  if (mihonSourceIds.length > 0) {
+    const { data: sourceRows } = await supabase
+      .from("mihon_sources")
+      .select("source_id, source_name")
+      .in("source_id", mihonSourceIds);
+    (sourceRows ?? []).forEach((row) => {
+      const typed = row as { source_id?: string | null; source_name?: string | null };
+      const id = String(typed.source_id ?? "").trim();
+      if (!id) return;
+      sourceNameById.set(id, String(typed.source_name ?? id));
+    });
   }
   
   return rows.map((row) => {
@@ -306,7 +384,10 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       "";
 
     const owners = volumeOwnersMap.get(readingId) ?? new Set();
-    const hasFamilyOwners = familyMemberIds.some(memberId => owners.has(memberId));
+    // "Collection famille" = au moins un propriétaire du foyer autre que l'utilisateur courant.
+    const hasFamilyOwners = Array.from(owners).some(
+      (ownerId) => ownerId !== userId && familyMemberIds.includes(ownerId)
+    );
     
     const mihonEntries = mihonPresenceByReadingId.get(readingId) ?? [];
     const currentUserMihon = mihonEntries.find((entry) => entry.userId === userId) ?? null;
@@ -327,6 +408,18 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
             : profileNameById.get(entry.userId) ?? `Membre ${entry.userId.slice(0, 8)}`,
         avatarPath: profileAvatarById.get(entry.userId) ?? null,
       }));
+    const mihonSources = Array.from(
+      new Set(
+        mihonEntries
+          .filter((entry) => familyMemberIds.includes(entry.userId))
+          .map((entry) => {
+            const sourceId = String((entry as { sourceId?: string }).sourceId ?? "").trim();
+            if (!sourceId) return "";
+            return sourceNameById.get(sourceId) ?? sourceId;
+          })
+          .filter((label) => label.length > 0)
+      )
+    );
     const mihonChaptersRead = Math.max(0, Number(currentUserMihon?.chaptersRead ?? 0));
     const mihonChaptersTotal = Math.max(
       0,
@@ -365,6 +458,7 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       preferMihonProgress,
       mihonUsers: Array.from(new Set(mihonUsers)),
       mihonUserBadges,
+      mihonSources,
       hasMihonInFamily,
     };
   });
@@ -399,19 +493,15 @@ export async function setReadingMihonState(
     return;
   }
 
-  const { error } = await supabase.from("reading_mihon_presence").upsert(
-    {
-      reading_id: rowId,
-      user_id: user.id,
-      chapters_read: Math.max(0, Number(payload?.chaptersRead ?? 0)),
-      chapters_total: Math.max(
-        0,
-        Number(payload?.chaptersTotal ?? payload?.chaptersRead ?? 0)
-      ),
-      prefer_mihon_progress: Boolean(payload?.preferMihonProgress ?? true),
-    },
-    { onConflict: "reading_id,user_id" }
-  );
+  const { error } = await supabase.rpc("upsert_reading_mihon_presence", {
+    p_reading_id: rowId,
+    p_chapters_read: Math.max(0, Number(payload?.chaptersRead ?? 0)),
+    p_chapters_total: Math.max(
+      0,
+      Number(payload?.chaptersTotal ?? payload?.chaptersRead ?? 0)
+    ),
+    p_prefer_mihon_progress: Boolean(payload?.preferMihonProgress ?? true),
+  });
   if (error) {
     throw new Error(error.message);
   }
@@ -448,10 +538,34 @@ export async function updateReadingStatus(
   userStatus: ReadingCollectionEntry["userStatus"]
 ) {
   const readStatus = mapUserStatusToReadStatus(userStatus);
+  const { data: row } = await supabase
+    .from("library_reading")
+    .select("reading_progress_by_source, mal_official_snapshot")
+    .eq("id", rowId)
+    .maybeSingle();
+  const prevBy = (row?.reading_progress_by_source ?? {}) as Record<string, unknown>;
+  let merged = mergeReadingProgressBySource(prevBy, "nexus", {
+    read_status: readStatus,
+    updated_at: new Date().toISOString(),
+  });
+  const nex = { ...(merged.nexus as Record<string, unknown> | undefined) };
+  if (nex.chapters_read == null) {
+    const ch = coalesceFirstFiniteNumber(
+      (prevBy.nexus as Record<string, unknown> | undefined)?.chapters_read,
+      (merged.mal as Record<string, unknown> | undefined)?.chapters_read,
+      extractNumChaptersReadFromMalOfficialSnapshot(row?.mal_official_snapshot)
+    );
+    if (ch != null) {
+      nex.chapters_read = ch;
+    }
+  }
+  merged = { ...merged, nexus: nex };
+  const canonical = resolveCanonicalReadStatus(merged) ?? readStatus;
   const { error } = await supabase
     .from("library_reading")
     .update({
-      read_status: readStatus,
+      reading_progress_by_source: merged,
+      read_status: canonical,
       updated_at: new Date().toISOString(),
     })
     .eq("id", rowId);
@@ -644,14 +758,15 @@ export async function createManualReadingEntry(
       },
     },
   };
-  const { error } = await supabase.from("library_reading").insert({
-    mal_manga_id: malId,
-    title,
-    read_status: mapUserStatusToReadStatus(userStatus),
-    main_picture_url: imageUrl || null,
-    jikan_snapshot: { full },
-    mal_official_snapshot: malSnapshot,
-    updated_at: new Date().toISOString(),
+  const { error } = await supabase.rpc("upsert_library_reading_entry", {
+    p_mal_manga_id: malId,
+    p_title: title,
+    p_title_english: String(full.title_english ?? title),
+    p_main_picture_url: imageUrl || null,
+    p_jikan_snapshot: { full },
+    p_mal_official_snapshot: malSnapshot,
+    p_read_status: mapUserStatusToReadStatus(userStatus),
+    p_user_notes: "",
   });
   if (error) {
     throw new Error(error.message);

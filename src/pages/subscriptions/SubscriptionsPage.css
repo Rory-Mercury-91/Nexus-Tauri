@@ -27,7 +27,7 @@
   color: var(--text-secondary);
   font-size: 0.95rem;
   line-height: 1.45;
-  max-width: 36rem;
+  max-width: none;
 }
 
 .subscriptions-header-actions {

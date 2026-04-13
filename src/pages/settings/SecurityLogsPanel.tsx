@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  readSecurityLogsCache,
+  SECURITY_LOGS_CACHE_TTL_MS,
+  writeSecurityLogsCache,
+} from "@/lib/settingsPanelsCache";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { useSession } from "@/hooks/useSession";
 import {
   clearClientLogs,
   listClientLogs,
@@ -48,6 +54,8 @@ function mapClientLogs(logs: ClientLogEntry[]): SecurityLogItem[] {
  * Journal local des erreurs client + derniers échecs de synchronisation Supabase.
  */
 export function SecurityLogsPanel() {
+  const { session } = useSession();
+  const userId = session?.user.id ?? "";
   const [items, setItems] = useState<SecurityLogItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +82,11 @@ export function SecurityLogsPanel() {
         ...mapFailedSyncRuns(reading.recent_runs ?? [], "reading"),
         ...mapClientLogs(listClientLogs()),
       ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-      setItems(merged.slice(0, 200));
+      const slice = merged.slice(0, 200);
+      setItems(slice);
+      if (userId) {
+        writeSecurityLogsCache(userId, slice);
+      }
     } catch (e) {
       setError(
         e instanceof Error
@@ -85,11 +97,17 @@ export function SecurityLogsPanel() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
+    if (!userId) return;
+    const cached = readSecurityLogsCache(userId);
+    if (cached && Date.now() - cached.cachedAt < SECURITY_LOGS_CACHE_TTL_MS) {
+      setItems(cached.items as SecurityLogItem[]);
+      return;
+    }
     void reload();
-  }, [reload]);
+  }, [userId, reload]);
 
   function handleClearClientLogs() {
     clearClientLogs();

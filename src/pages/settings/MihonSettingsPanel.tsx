@@ -1,6 +1,12 @@
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useDataFetchOverlay } from "@/contexts/DataFetchOverlayContext";
 import {
+  MIHON_INDEX_CACHE_TTL_MS,
+  readMihonIndexStatsCache,
+  writeMihonIndexStatsCache,
+} from "@/lib/settingsPanelsCache";
+import { useSession } from "@/hooks/useSession";
+import {
   getMihonSourceIndexStats,
   MIHON_KEIYOUSHI_INDEX_URL,
   refreshMihonSourceIndex,
@@ -12,6 +18,8 @@ import {
 } from "@/services/library/mihonBackupImportService";
 
 export function MihonSettingsPanel() {
+  const { session } = useSession();
+  const userId = session?.user.id ?? "";
   const { beginPageDataLoad, endPageDataLoad } = useDataFetchOverlay();
   const [mihonIndexBusy, setMihonIndexBusy] = useState(false);
   const [mihonIndexInfo, setMihonIndexInfo] = useState<string | null>(null);
@@ -30,15 +38,24 @@ export function MihonSettingsPanel() {
     try {
       const stats = await getMihonSourceIndexStats();
       setMihonIndexStats(stats);
+      if (userId) {
+        writeMihonIndexStatsCache(userId, stats);
+      }
     } catch (error) {
       console.error("Erreur chargement stats index MIHON:", error);
       setMihonIndexStats(null);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
+    if (!userId) return;
+    const cached = readMihonIndexStatsCache(userId);
+    if (cached && Date.now() - cached.cachedAt < MIHON_INDEX_CACHE_TTL_MS) {
+      setMihonIndexStats(cached.stats);
+      return;
+    }
     void loadMihonIndexStats();
-  }, [loadMihonIndexStats]);
+  }, [userId, loadMihonIndexStats]);
 
   const handleRefreshMihonIndex = useCallback(async () => {
     setMihonIndexBusy(true);

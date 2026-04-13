@@ -12,6 +12,8 @@ type LibraryDetailStickyHeaderProps = {
   editLabel?: string;
   syncTitle?: string;
   refreshTitle?: string;
+  onExportJson?: () => void;
+  exportBusy?: boolean;
 };
 
 export function LibraryDetailStickyHeader({
@@ -26,6 +28,8 @@ export function LibraryDetailStickyHeader({
   editLabel = "Modifier la fiche",
   syncTitle,
   refreshTitle,
+  onExportJson,
+  exportBusy = false,
 }: LibraryDetailStickyHeaderProps) {
   return (
     <div className="anime-detail-sticky-header">
@@ -51,6 +55,17 @@ export function LibraryDetailStickyHeader({
         >
           Rafraîchir la fiche
         </button>
+        {onExportJson ? (
+          <button
+            type="button"
+            className="anime-detail-action-btn"
+            onClick={onExportJson}
+            disabled={exportBusy}
+            title="Exporter toutes les données brutes de cette fiche"
+          >
+            {exportBusy ? "Export..." : "Exporter JSON"}
+          </button>
+        ) : null}
         {onDelete ? (
           <button
             type="button"

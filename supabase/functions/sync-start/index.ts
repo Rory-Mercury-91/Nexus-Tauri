@@ -10,6 +10,7 @@ type Body = {
   source?: SyncSource;
   media_type?: "anime" | "reading";
   selected_field_ids?: string[];
+  target_mal_id?: number;
 };
 
 Deno.serve(async (req) => {
@@ -31,6 +32,14 @@ Deno.serve(async (req) => {
           .map((value) => value.trim())
           .filter((value) => value.length > 0)
       : [];
+    const rawTarget = body.target_mal_id;
+    const targetMalId =
+      typeof rawTarget === "number" && Number.isFinite(rawTarget) && rawTarget > 0
+        ? Math.floor(rawTarget)
+        : typeof rawTarget === "string" && rawTarget.trim() !== ""
+        ? Math.floor(Number(rawTarget))
+        : NaN;
+    const targetMalIdSafe = Number.isFinite(targetMalId) && targetMalId > 0 ? targetMalId : null;
     if (
       (source !== "mal" && source !== "anilist") ||
       (mediaType !== "anime" && mediaType !== "reading")
@@ -103,6 +112,14 @@ Deno.serve(async (req) => {
     }
 
     const startedAt = nowIso();
+    const importPayload: Record<string, unknown> = {
+      source,
+      media_type: mediaType,
+      selected_field_ids: selectedFieldIds,
+    };
+    if (targetMalIdSafe != null) {
+      importPayload.target_mal_id = targetMalIdSafe;
+    }
     const { error: queueErr } = await admin.from("sync_jobs").insert({
       run_id: run.id,
       user_id: userId,
@@ -110,7 +127,7 @@ Deno.serve(async (req) => {
       status: "queued",
       attempts: 0,
       available_at: startedAt,
-      payload: { source, media_type: mediaType, selected_field_ids: selectedFieldIds },
+      payload: importPayload,
       created_at: startedAt,
       updated_at: startedAt,
     });

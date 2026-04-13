@@ -30,6 +30,14 @@
   letter-spacing: 0.03em;
 }
 
+.nautiljon-import-auth-hint,
+.nautiljon-import-empty-hint {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .nautiljon-import-targets {
   display: grid;
   grid-template-columns: 1fr;

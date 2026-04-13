@@ -18,12 +18,22 @@ import { LibraryEditEntryModal, type LibraryEditField } from "@/components/modal
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { notifyToast } from "@/lib/toastEvents";
 import { downloadImageToDownloads } from "@/lib/imageDownload";
+import { downloadJsonFile, isDebugModeEnabled } from "@/lib/debugTools";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { LibraryDetailStickyHeader } from "@/pages/library/LibraryDetailStickyHeader";
 import { listFamilyMembersWithRole, listMyFamilies, type FamilyMemberWithRole } from "@/services/family/familyService";
 import { fetchReadingFull, fetchReadingPictures } from "@/services/jikan/readingJikanService";
-import { fetchReadingVolumes, upsertReadingVolume, type ReadingVolumeRow } from "@/services/library/readingVolumeService";
+import {
+  fetchReadingVolumes,
+  normalizeOwnerUserId,
+  upsertReadingVolume,
+  type ReadingVolumeRow,
+} from "@/services/library/readingVolumeService";
 import { deleteReadingEntry } from "@/services/library/readingCollectionService";
+import { removeFromExternalList } from "@/services/library/externalReadingListDeleteService";
+import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
+import { DeleteLibraryEntryConfirmModal } from "@/features/library/DeleteLibraryEntryConfirmModal/DeleteLibraryEntryConfirmModal";
+import { isMalSyntheticId } from "@/lib/malSyntheticIds";
 import { buildReadingSyncDiffFields } from "@/services/library/syncDiffService";
 import { translateLibraryTerm, translateLibraryTerms } from "@/services/library/termTranslations";
 import { scrollMainToTop } from "@/lib/collectionScroll";
@@ -49,11 +59,26 @@ type EditingVolumeState = {
   imageUrl: string;
   releaseDateVf: string;
   purchaseDate: string;
-  isOwned: boolean;
-  isRead: boolean;
-  isMihon: boolean;
   ownerIds: string[];
 };
+
+type PropagateOwnersDraft = {
+  sourceVolumeNumber: number;
+  ownerIds: string[];
+  volumesSnapshot: ReadingVolumeRow[];
+};
+
+function normalizeOwnerIdsKey(owners: ReadingVolumeRow["owners"]): string {
+  return owners
+    .map((o) => o.userId)
+    .filter(Boolean)
+    .sort()
+    .join(",");
+}
+
+function normalizeUserIdsList(ids: string[]): string {
+  return [...ids].filter(Boolean).sort().join(",");
+}
 
 function mapReadStatusToFr(raw: string | null): string {
   const key = String(raw ?? "")
@@ -221,22 +246,78 @@ export function ReadingDetailPage() {
   const [franchiseEntries, setFranchiseEntries] = useState<FranchiseDbEntry[]>([]);
   const [volumes, setVolumes] = useState<ReadingVolumeRow[]>([]);
   const [familyId, setFamilyId] = useState<string | null>(null);
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [familyMembers, setFamilyMembers] = useState<FamilyMemberWithRole[]>([]);
   const [isVolumeModalOpen, setIsVolumeModalOpen] = useState(false);
   const [editingVolume, setEditingVolume] = useState<EditingVolumeState | null>(null);
   const [volumeSaving, setVolumeSaving] = useState(false);
+  const [propagateOwnersDraft, setPropagateOwnersDraft] = useState<PropagateOwnersDraft | null>(null);
+  const [propagateOwnerTargetsSelected, setPropagateOwnerTargetsSelected] = useState<Set<number>>(() => new Set());
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [translatingSynopsis, setTranslatingSynopsis] = useState(false);
   const [syncLaunching, setSyncLaunching] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [integrationConnected, setIntegrationConnected] = useState({ mal: false, anilist: false });
+  const [exportingDebugJson, setExportingDebugJson] = useState(false);
   const { startSync: startReadingSync, activeRun: activeReadingRun } = useReadingSyncProgress();
   const [selectedDiffFieldIds, setSelectedDiffFieldIds] = useState<string[]>([]);
   const [galleryImages, setGalleryImages] = useState<string[]>([]);
   const [collapseChapters, setCollapseChapters] = useState<boolean>(() => localStorage.getItem("reading-detail:collapse:chapters") === "1");
   const [collapseVolumes, setCollapseVolumes] = useState<boolean>(() => localStorage.getItem("reading-detail:collapse:volumes") === "1");
   const chapterProgress = chaptersTotal > 0 ? Math.round((chaptersRead / Math.max(1, chaptersTotal)) * 100) : 0;
+
+  const effectiveMalMangaId = useMemo(() => {
+    const fromDb = Number((rawDbRow as { mal_manga_id?: unknown } | null)?.mal_manga_id ?? 0);
+    if (Number.isFinite(fromDb) && fromDb > 0) {
+      return fromDb;
+    }
+    return malId;
+  }, [rawDbRow, malId]);
+
+  const malIdForRemote = useMemo(() => {
+    if (effectiveMalMangaId === null) {
+      return null;
+    }
+    const n = Number(effectiveMalMangaId);
+    if (!Number.isFinite(n) || n <= 0) {
+      return null;
+    }
+    if (isMalSyntheticId(n)) {
+      return null;
+    }
+    return n;
+  }, [effectiveMalMangaId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const supabase = getSupabaseClient();
+        const [malStatus, aniStatus] = await Promise.all([
+          fetchIntegrationStatus(supabase, "mal"),
+          fetchIntegrationStatus(supabase, "anilist"),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setIntegrationConnected({
+          mal: malStatus.ok && malStatus.status.connected,
+          anilist: aniStatus.ok && aniStatus.status.connected,
+        });
+      } catch {
+        if (!cancelled) {
+          setIntegrationConnected({ mal: false, anilist: false });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const readingView = useMemo(() => {
     const db = rawDbRow ?? {};
     const rawMalSnapshot = ((db.mal_official_snapshot as Record<string, unknown> | undefined) ?? {});
@@ -873,9 +954,6 @@ export function ReadingDetailPage() {
       imageUrl: existing?.imageUrl ?? "",
       releaseDateVf: existing?.releaseDateVf ?? "",
       purchaseDate: existing?.purchaseDate ?? "",
-      isOwned: existing?.isOwned ?? false,
-      isRead: existing?.isRead ?? false,
-      isMihon: existing?.isMihon ?? false,
       ownerIds: existing?.owners.map((owner) => owner.userId) ?? [],
     });
     setIsVolumeModalOpen(true);
@@ -888,30 +966,124 @@ export function ReadingDetailPage() {
     setVolumeSaving(true);
     try {
       const supabase = getSupabaseClient();
-      const ownerCount = Math.max(1, editingVolume.ownerIds.length);
+      const { data: authUser } = await supabase.auth.getUser();
+      const existingVol = volumeByNumber.get(editingVolume.volumeNumber);
+      let ownerIds = [...editingVolume.ownerIds];
+      if (existingVol?.isOwned && ownerIds.length === 0 && authUser.user?.id) {
+        ownerIds = [authUser.user.id];
+      }
+      const ownerCount = Math.max(1, ownerIds.length);
       const share = Number((editingVolume.priceEuros / ownerCount).toFixed(2));
+      const resolvedFamilyId = familyId ?? volumeByNumber.get(editingVolume.volumeNumber)?.familyId ?? null;
+      if (!malId) {
+        throw new Error("MAL manga id manquant.");
+      }
       await upsertReadingVolume(supabase, {
-        id: volumeByNumber.get(editingVolume.volumeNumber)?.id,
         readingId: readingRowId,
-        familyId,
+        malMangaId: malId,
+        familyId: resolvedFamilyId,
         volumeNumber: editingVolume.volumeNumber,
         volumeType: editingVolume.volumeType,
         imageUrl: editingVolume.imageUrl || null,
         releaseDateVf: editingVolume.releaseDateVf || null,
         purchaseDate: editingVolume.purchaseDate || null,
         priceEuros: editingVolume.priceEuros,
-        isOwned: editingVolume.isOwned,
-        isRead: editingVolume.isRead,
-        isMihon: editingVolume.isMihon,
-        owners: editingVolume.ownerIds.map((ownerId) => ({ userId: ownerId, shareEuros: share })),
+        isOwned: existingVol?.isOwned ?? false,
+        isRead: existingVol?.isRead ?? false,
+        isMihon: existingVol?.isMihon ?? false,
+        owners: ownerIds.map((ownerId) => ({ userId: ownerId, shareEuros: share })),
       });
-      const refreshed = await fetchReadingVolumes(supabase, readingRowId);
+      const refreshed = await fetchReadingVolumes(supabase, readingRowId, {
+        familyId: resolvedFamilyId,
+        currentUserId: sessionUserId,
+      });
       setVolumes(refreshed);
+      const sourceNum = editingVolume.volumeNumber;
+      const multiOwner = ownerIds.length >= 2;
+      const candidateTargets = refreshed.filter(
+        (v) => v.releaseDateVf && v.volumeNumber !== sourceNum
+      );
       setIsVolumeModalOpen(false);
       setEditingVolume(null);
+      notifyToast({ kind: "success", message: "Tome enregistré." });
+      if (resolvedFamilyId && multiOwner && candidateTargets.length > 0) {
+        setPropagateOwnersDraft({
+          sourceVolumeNumber: sourceNum,
+          ownerIds,
+          volumesSnapshot: refreshed,
+        });
+        setPropagateOwnerTargetsSelected(new Set(candidateTargets.map((v) => v.volumeNumber)));
+      }
+    } catch (err) {
+      notifyToast({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Impossible d'enregistrer le tome.",
+      });
     } finally {
       setVolumeSaving(false);
     }
+  }
+
+  async function applyPropagateOwners() {
+    if (!propagateOwnersDraft || !readingRowId) {
+      return;
+    }
+    setVolumeSaving(true);
+    try {
+      const supabase = getSupabaseClient();
+      for (const volumeNumber of propagateOwnerTargetsSelected) {
+        if (volumeNumber === propagateOwnersDraft.sourceVolumeNumber) {
+          continue;
+        }
+        const vol = propagateOwnersDraft.volumesSnapshot.find((v) => v.volumeNumber === volumeNumber);
+        if (!vol) {
+          continue;
+        }
+        const ownerCount = Math.max(1, propagateOwnersDraft.ownerIds.length);
+        const share = Number((vol.priceEuros / ownerCount).toFixed(2));
+        const owners = propagateOwnersDraft.ownerIds.map((id) => ({ userId: id, shareEuros: share }));
+        const resolvedFamilyId = familyId ?? vol.familyId ?? null;
+        if (!malId) {
+          throw new Error("MAL manga id manquant.");
+        }
+        await upsertReadingVolume(supabase, {
+          readingId: readingRowId,
+          malMangaId: malId,
+          familyId: resolvedFamilyId,
+          volumeNumber: vol.volumeNumber,
+          volumeType: vol.volumeType,
+          imageUrl: vol.imageUrl,
+          releaseDateVf: vol.releaseDateVf,
+          purchaseDate: vol.purchaseDate,
+          priceEuros: vol.priceEuros,
+          isOwned: owners.length > 0,
+          isRead: vol.isRead,
+          isMihon: vol.isMihon,
+          owners,
+        });
+      }
+      const refreshed = await fetchReadingVolumes(supabase, readingRowId, {
+        familyId: familyId ?? null,
+        currentUserId: sessionUserId,
+      });
+      setVolumes(refreshed);
+      setPropagateOwnersDraft(null);
+      setPropagateOwnerTargetsSelected(new Set());
+      notifyToast({ kind: "success", message: "Propriétaires appliqués aux tomes sélectionnés." });
+    } catch (err) {
+      notifyToast({
+        kind: "error",
+        message:
+          err instanceof Error ? err.message : "Impossible de propager les propriétaires.",
+      });
+    } finally {
+      setVolumeSaving(false);
+    }
+  }
+
+  function closePropagateOwnersModal() {
+    setPropagateOwnersDraft(null);
+    setPropagateOwnerTargetsSelected(new Set());
   }
 
   async function markAllVolumesAs(field: "isRead" | "isOwned") {
@@ -944,9 +1116,10 @@ export function ReadingDetailPage() {
         
         // Si on marque comme possédé, ajouter l'utilisateur actuel aux propriétaires
         if (field === "isOwned" && currentUserId) {
-          const ownerIds = new Set(volume.owners.map(o => o.userId));
-          if (!ownerIds.has(currentUserId)) {
-            ownerIds.add(currentUserId);
+          const uid = normalizeOwnerUserId(currentUserId);
+          const ownerIds = new Set(volume.owners.map((o) => normalizeOwnerUserId(o.userId)));
+          if (!ownerIds.has(uid)) {
+            ownerIds.add(uid);
           }
           // Recalculer les parts de prix
           const ownerCount = Math.max(1, ownerIds.size);
@@ -957,10 +1130,14 @@ export function ReadingDetailPage() {
           }));
         }
         
+        const resolvedFamilyId = familyId ?? volume.familyId ?? null;
+        if (!malId) {
+          throw new Error("MAL manga id manquant.");
+        }
         await upsertReadingVolume(supabase, {
-          id: volume.id,
           readingId: volume.readingId,
-          familyId: volume.familyId,
+          malMangaId: malId,
+          familyId: resolvedFamilyId,
           volumeNumber: volume.volumeNumber,
           volumeType: volume.volumeType,
           imageUrl: volume.imageUrl,
@@ -1002,7 +1179,10 @@ export function ReadingDetailPage() {
         setRawDbRow((prev) => (prev ? { ...prev, mal_official_snapshot: updatedSnapshot } : prev));
       }
       
-      const refreshed = await fetchReadingVolumes(supabase, readingRowId);
+      const refreshed = await fetchReadingVolumes(supabase, readingRowId, {
+        familyId: familyId ?? null,
+        currentUserId: sessionUserId,
+      });
       setVolumes(refreshed);
       notifyToast({ kind: "success", message: `Tous les tomes marqués comme ${field === "isRead" ? "lus" : "possédés"}.` });
     } catch {
@@ -1035,14 +1215,15 @@ export function ReadingDetailPage() {
         const currentUserId = user?.id;
         
         if (currentUserId) {
-          const ownerIds = new Set(current.owners.map(o => o.userId));
-          
-          if (patch.isOwned && !ownerIds.has(currentUserId)) {
+          const uid = normalizeOwnerUserId(currentUserId);
+          const ownerIds = new Set(current.owners.map((o) => normalizeOwnerUserId(o.userId)));
+
+          if (patch.isOwned && !ownerIds.has(uid)) {
             // Ajouter l'utilisateur actuel comme propriétaire
-            ownerIds.add(currentUserId);
-          } else if (!patch.isOwned && ownerIds.has(currentUserId)) {
+            ownerIds.add(uid);
+          } else if (!patch.isOwned && ownerIds.has(uid)) {
             // Retirer l'utilisateur actuel des propriétaires
-            ownerIds.delete(currentUserId);
+            ownerIds.delete(uid);
           }
           
           // Recalculer les parts de prix
@@ -1055,10 +1236,14 @@ export function ReadingDetailPage() {
         }
       }
       
+      const resolvedFamilyId = familyId ?? current.familyId ?? null;
+      if (!malId) {
+        throw new Error("MAL manga id manquant.");
+      }
       await upsertReadingVolume(supabase, {
-        id: current.id,
         readingId: current.readingId,
-        familyId: current.familyId,
+        malMangaId: malId,
+        familyId: resolvedFamilyId,
         volumeNumber: current.volumeNumber,
         volumeType: current.volumeType,
         imageUrl: current.imageUrl,
@@ -1070,10 +1255,17 @@ export function ReadingDetailPage() {
         isMihon: patch.isMihon ?? current.isMihon,
         owners: nextOwners,
       });
-      const refreshed = await fetchReadingVolumes(supabase, readingRowId);
+      const refreshed = await fetchReadingVolumes(supabase, readingRowId, {
+        familyId: resolvedFamilyId,
+        currentUserId: sessionUserId,
+      });
       setVolumes(refreshed);
-    } catch {
+    } catch (err) {
       setVolumes(previousVolumes);
+      notifyToast({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Impossible de mettre à jour le tome.",
+      });
     }
   }
 
@@ -1156,6 +1348,20 @@ export function ReadingDetailPage() {
 
   useEffect(() => {
     let cancelled = false;
+    void getSupabaseClient()
+      .auth.getUser()
+      .then(({ data }) => {
+        if (!cancelled) {
+          setSessionUserId(data.user?.id ?? null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       const supabase = getSupabaseClient();
       const families = await listMyFamilies(supabase);
@@ -1183,7 +1389,10 @@ export function ReadingDetailPage() {
     let cancelled = false;
     (async () => {
       const supabase = getSupabaseClient();
-      const rows = await fetchReadingVolumes(supabase, readingRowId);
+      const rows = await fetchReadingVolumes(supabase, readingRowId, {
+        familyId: familyId ?? null,
+        currentUserId: sessionUserId,
+      });
       if (!cancelled) {
         setVolumes(rows);
       }
@@ -1191,7 +1400,7 @@ export function ReadingDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [readingRowId]);
+  }, [readingRowId, familyId, sessionUserId]);
 
   async function updateReadingStatus(next: string) {
     const previous = userReadStatus;
@@ -1463,19 +1672,45 @@ export function ReadingDetailPage() {
     }
   }
 
-  async function deleteCurrentReadingEntry() {
+  function openDeleteReadingModal() {
     if (!readingRowId || deleting) {
       return;
     }
-    const confirmed = window.confirm("Supprimer cette fiche lecture locale ?");
-    if (!confirmed) {
+    setDeleteModalOpen(true);
+  }
+
+  async function confirmDeleteReading(opts: { removeMal: boolean; removeAnilist: boolean }) {
+    if (!readingRowId || deleting) {
       return;
     }
     setDeleting(true);
     try {
       const supabase = getSupabaseClient();
+      if (opts.removeMal && malIdForRemote) {
+        const r = await removeFromExternalList(supabase, {
+          provider: "mal",
+          malMediaId: malIdForRemote,
+          catalog: "manga",
+        });
+        if (!r.ok) {
+          notifyToast({ kind: "error", message: r.error });
+          return;
+        }
+      }
+      if (opts.removeAnilist && malIdForRemote) {
+        const r = await removeFromExternalList(supabase, {
+          provider: "anilist",
+          malMediaId: malIdForRemote,
+          catalog: "manga",
+        });
+        if (!r.ok) {
+          notifyToast({ kind: "error", message: r.error });
+          return;
+        }
+      }
       await deleteReadingEntry(supabase, readingRowId);
       notifyToast({ kind: "success", message: "Fiche supprimée." });
+      setDeleteModalOpen(false);
       navigate("/lectures", { state: backState });
     } catch (error) {
       notifyToast({
@@ -1527,6 +1762,109 @@ export function ReadingDetailPage() {
     notifyToast({ kind: "error", message: result.error });
   }
 
+  async function exportDebugPayload() {
+    if (!readingRowId || !malId || exportingDebugJson) {
+      return;
+    }
+    setExportingDebugJson(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id ?? null;
+      const [
+        readingById,
+        readingByMal,
+        catalogRows,
+        stateRows,
+        mihonRows,
+        publicRows,
+      ] = await Promise.all([
+        supabase.from("library_reading").select("*").eq("id", readingRowId).maybeSingle(),
+        supabase.from("library_reading").select("*").eq("mal_manga_id", malId),
+        supabase
+          .from("library_manga_volume_catalog")
+          .select("*")
+          .eq("mal_manga_id", malId)
+          .order("volume_number", { ascending: true }),
+        supabase.from("user_manga_volume_state").select("*").eq("reading_id", readingRowId),
+        supabase
+          .from("reading_mihon_presence")
+          .select("*")
+          .eq("reading_id", readingRowId),
+        supabase.from("library_reading_public").select("*").eq("mal_manga_id", malId),
+      ]);
+      const catalogIds = (catalogRows.data ?? [])
+        .map((c) => String((c as { id?: unknown }).id ?? "").trim())
+        .filter(Boolean);
+      const ownersRows =
+        familyId && catalogIds.length > 0
+          ? await supabase
+              .from("family_manga_volume_owner")
+              .select("family_id, catalog_volume_id, user_id, share_euros, created_at, updated_at")
+              .eq("family_id", familyId)
+              .in("catalog_volume_id", catalogIds)
+          : { data: [], error: null };
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        app: "Nexus-Tauri",
+        entity: {
+          media: "reading",
+          mal_id: malId,
+          reading_row_id: readingRowId,
+        },
+        context: {
+          user_id: userId,
+          url_path: window.location.pathname,
+          debug_mode_enabled: isDebugModeEnabled(),
+        },
+        local_state: {
+          raw_db_row: rawDbRow,
+          raw_live_jikan: rawLiveJikan,
+          reading_view: readingView,
+          chapters_read: chaptersRead,
+          chapters_total: chaptersTotal,
+          volumes_read: volumesRead,
+          volumes_loaded: volumes,
+          family_members: familyMembers,
+          franchise_entries: franchiseEntries,
+        },
+        supabase: {
+          reading_by_id: readingById.data ?? null,
+          reading_by_mal_all_rows: readingByMal.data ?? [],
+          library_manga_volume_catalog: catalogRows.data ?? [],
+          user_manga_volume_state: stateRows.data ?? [],
+          family_manga_volume_owner: ownersRows.data ?? [],
+          reading_mihon_presence: mihonRows.data ?? [],
+          reading_public_rows: publicRows.data ?? [],
+          errors: {
+            reading_by_id: readingById.error?.message ?? null,
+            reading_by_mal: readingByMal.error?.message ?? null,
+            library_manga_volume_catalog: catalogRows.error?.message ?? null,
+            user_manga_volume_state: stateRows.error?.message ?? null,
+            family_manga_volume_owner: ownersRows.error?.message ?? null,
+            reading_mihon_presence: mihonRows.error?.message ?? null,
+            reading_public_rows: publicRows.error?.message ?? null,
+          },
+        },
+      };
+
+      const safeTitle = String(readingView.title || `reading-${malId}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]+/g, "-")
+        .slice(0, 60);
+      downloadJsonFile(`debug-reading-${malId}-${safeTitle}.json`, payload);
+      notifyToast({ kind: "success", message: "Export JSON debug généré." });
+    } catch (error) {
+      notifyToast({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Export debug impossible.",
+      });
+    } finally {
+      setExportingDebugJson(false);
+    }
+  }
+
 
   return (
     <div className="library-page anime-detail-page reading-detail-page">
@@ -1537,7 +1875,11 @@ export function ReadingDetailPage() {
         onSync={() => void openSyncDiffModal()}
         onEdit={() => setIsEditModalOpen(true)}
         onRefresh={() => window.location.reload()}
-        onDelete={() => void deleteCurrentReadingEntry()}
+        onExportJson={
+          isDebugModeEnabled() ? () => void exportDebugPayload() : undefined
+        }
+        exportBusy={exportingDebugJson}
+        onDelete={() => openDeleteReadingModal()}
         deleting={deleting}
       />
       <LibraryEditEntryModal
@@ -1996,23 +2338,6 @@ export function ReadingDetailPage() {
                     avatarSize={30}
                   />
                 </label>
-                <div className="reading-edit-volume-toggles reading-span-2">
-                  <ToggleSwitch
-                    checked={editingVolume.isOwned}
-                    onChange={(checked) => setEditingVolume((prev) => (prev ? { ...prev, isOwned: checked } : prev))}
-                    label="Possédé"
-                  />
-                  <ToggleSwitch
-                    checked={editingVolume.isRead}
-                    onChange={(checked) => setEditingVolume((prev) => (prev ? { ...prev, isRead: checked } : prev))}
-                    label="Lu"
-                  />
-                  <ToggleSwitch
-                    checked={editingVolume.isMihon}
-                    onChange={(checked) => setEditingVolume((prev) => (prev ? { ...prev, isMihon: checked } : prev))}
-                    label="Mihon"
-                  />
-                </div>
               </div>
               <div className="reading-modal-actions">
                 <button type="button" className="anime-collection-btn" onClick={() => setIsVolumeModalOpen(false)} disabled={volumeSaving}>
@@ -2026,6 +2351,112 @@ export function ReadingDetailPage() {
           </div>
         ) : null}
       </Modal>
+
+      <Modal
+        open={Boolean(propagateOwnersDraft)}
+        onClose={closePropagateOwnersModal}
+        title="Propager les propriétaires"
+        maxWidth="min(96vw, 36rem)"
+      >
+        {propagateOwnersDraft ? (
+          <div className="reading-propagate-owners-modal">
+            <p className="anime-detail-prose">
+              Le tome {propagateOwnersDraft.sourceVolumeNumber} a plusieurs propriétaires. Tu peux appliquer le même groupe
+              aux autres tomes (parts recalculées selon le prix de chaque tome).
+            </p>
+            <div className="reading-propagate-actions">
+              <button
+                type="button"
+                className="anime-detail-action-btn anime-detail-action-btn-small"
+                onClick={() => {
+                  const nums = propagateOwnersDraft.volumesSnapshot
+                    .filter((v) => v.releaseDateVf && v.volumeNumber !== propagateOwnersDraft.sourceVolumeNumber)
+                    .map((v) => v.volumeNumber);
+                  setPropagateOwnerTargetsSelected(new Set(nums));
+                }}
+              >
+                Tous
+              </button>
+              <button
+                type="button"
+                className="anime-detail-action-btn anime-detail-action-btn-small"
+                onClick={() => setPropagateOwnerTargetsSelected(new Set())}
+              >
+                Aucun
+              </button>
+            </div>
+            <ul className="reading-propagate-volume-list">
+              {propagateOwnersDraft.volumesSnapshot
+                .filter(
+                  (v) =>
+                    v.releaseDateVf && v.volumeNumber !== propagateOwnersDraft.sourceVolumeNumber
+                )
+                .map((vol) => {
+                  const selected = propagateOwnerTargetsSelected.has(vol.volumeNumber);
+                  const targetKey = normalizeUserIdsList(propagateOwnersDraft.ownerIds);
+                  const conflict =
+                    vol.owners.length > 0 && normalizeOwnerIdsKey(vol.owners) !== targetKey;
+                  return (
+                    <li key={vol.volumeNumber}>
+                      <div className="reading-propagate-volume-item">
+                        <ToggleSwitch
+                          checked={selected}
+                          onChange={(checked) => {
+                            setPropagateOwnerTargetsSelected((prev) => {
+                              const next = new Set(prev);
+                              if (checked) {
+                                next.add(vol.volumeNumber);
+                              } else {
+                                next.delete(vol.volumeNumber);
+                              }
+                              return next;
+                            });
+                          }}
+                          label={`Tome ${vol.volumeNumber}`}
+                        />
+                        {conflict ? (
+                          <small className="reading-propagate-warning">
+                            Possession différente : vérifier manuellement après application.
+                          </small>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+            </ul>
+            <div className="reading-modal-actions reading-propagate-footer">
+              <button
+                type="button"
+                className="anime-collection-btn"
+                onClick={closePropagateOwnersModal}
+                disabled={volumeSaving}
+              >
+                Plus tard
+              </button>
+              <button
+                type="button"
+                className="anime-collection-btn"
+                onClick={() => void applyPropagateOwners()}
+                disabled={volumeSaving || propagateOwnerTargetsSelected.size === 0}
+              >
+                Appliquer
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <DeleteLibraryEntryConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        entryTitle={readingView.title}
+        kind="reading"
+        malMediaId={malIdForRemote}
+        oauthMalConnected={integrationConnected.mal}
+        oauthAnilistConnected={integrationConnected.anilist}
+        busy={deleting}
+        onConfirm={(opts) => void confirmDeleteReading(opts)}
+      />
 
       <LibrarySyncDiffModal
         open={isSyncModalOpen}

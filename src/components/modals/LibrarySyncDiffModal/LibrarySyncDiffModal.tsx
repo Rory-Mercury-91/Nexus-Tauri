@@ -14,6 +14,10 @@ type LibrarySyncDiffModalProps = {
   onSyncAnilist: () => void;
   onValidate?: () => void;
   syncing?: boolean;
+  /** Depuis la page collection : n’afficher que le bouton de la source prévisualisée. */
+  activeSource?: "mal" | "anilist";
+  /** Texte sous le titre (ex. aperçu agrégé liste). */
+  lead?: string;
 };
 
 export function LibrarySyncDiffModal({
@@ -28,8 +32,12 @@ export function LibrarySyncDiffModal({
   onSyncAnilist,
   onValidate,
   syncing = false,
+  activeSource,
+  lead,
 }: LibrarySyncDiffModalProps) {
   const hasFields = fields.length > 0;
+  const showMal = !activeSource || activeSource === "mal";
+  const showAnilist = !activeSource || activeSource === "anilist";
 
   return (
     <Modal
@@ -39,7 +47,8 @@ export function LibrarySyncDiffModal({
       maxWidth="min(96vw, 60rem)"
     >
       <p className="library-page-lead" style={{ marginBottom: "var(--space-2)" }}>
-        Coche les champs à appliquer depuis la source.
+        {lead ??
+          "Coche les champs à appliquer depuis la source."}
       </p>
       <div className="library-sync-diff-head-actions">
         <button type="button" className="anime-collection-btn" onClick={onSelectAll} disabled={!hasFields}>
@@ -92,12 +101,16 @@ export function LibrarySyncDiffModal({
             Valider
           </button>
         ) : null}
-        <button type="button" className="anime-collection-btn" onClick={onSyncMal} disabled={syncing}>
-          Sync MAL ({selectedFieldIds.length})
-        </button>
-        <button type="button" className="anime-collection-btn" onClick={onSyncAnilist} disabled={syncing}>
-          Sync AniList ({selectedFieldIds.length})
-        </button>
+        {showMal ? (
+          <button type="button" className="anime-collection-btn" onClick={onSyncMal} disabled={syncing}>
+            Sync MAL ({selectedFieldIds.length})
+          </button>
+        ) : null}
+        {showAnilist ? (
+          <button type="button" className="anime-collection-btn" onClick={onSyncAnilist} disabled={syncing}>
+            Sync AniList ({selectedFieldIds.length})
+          </button>
+        ) : null}
       </div>
     </Modal>
   );

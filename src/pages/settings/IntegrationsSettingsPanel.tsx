@@ -10,7 +10,6 @@ import {
   type IntegrationConnectionStatus,
   type IntegrationProvider,
 } from "@/services/integrations/integrationService";
-
 type ProviderState = {
   status: IntegrationConnectionStatus;
   busy: boolean;
@@ -26,10 +25,17 @@ const DEFAULT_STATUS: IntegrationConnectionStatus = {
 const TAMPERMONKEY_SCRIPT_URL =
   "https://raw.githubusercontent.com/Rory-Mercury-91/Nexus-Tauri/main/public/tampermonkey/Nautiljon%20Extractor.user.js";
 
+export type IntegrationsSettingsPanelProps = {
+  /** Appelé après un changement d’état OAuth (connexion, déconnexion, refresh) pour synchroniser l’UI ailleurs (ex. onglet Listes manga). */
+  onIntegrationStatusChanged?: () => void;
+};
+
 /**
  * Onglet "Intégrations" : connexion OAuth MAL et AniList.
  */
-export function IntegrationsSettingsPanel() {
+export function IntegrationsSettingsPanel({
+  onIntegrationStatusChanged,
+}: IntegrationsSettingsPanelProps = {}) {
   const { beginPageDataLoad, endPageDataLoad } = useDataFetchOverlay();
   const [stateByProvider, setStateByProvider] = useState<
     Record<IntegrationProvider, ProviderState>
@@ -69,10 +75,11 @@ export function IntegrationsSettingsPanel() {
     beginPageDataLoad();
     try {
       await Promise.all([loadProviderStatus("mal"), loadProviderStatus("anilist")]);
+      onIntegrationStatusChanged?.();
     } finally {
       endPageDataLoad();
     }
-  }, [beginPageDataLoad, endPageDataLoad, loadProviderStatus]);
+  }, [beginPageDataLoad, endPageDataLoad, loadProviderStatus, onIntegrationStatusChanged]);
 
   useEffect(() => {
     void loadAllStatuses();
@@ -96,7 +103,7 @@ export function IntegrationsSettingsPanel() {
         `Connexion ${oauthProvider.toUpperCase()} réussie. Statut rafraîchi.`
       );
       setProviderState(oauthProvider, { error: null });
-      void loadProviderStatus(oauthProvider);
+      void loadProviderStatus(oauthProvider).then(() => onIntegrationStatusChanged?.());
     } else {
       setProviderState(oauthProvider, {
         error: `Connexion ${oauthProvider.toUpperCase()} échouée: ${oauthResult}${reasonText}`,
@@ -107,7 +114,7 @@ export function IntegrationsSettingsPanel() {
     url.searchParams.delete("integration_oauth_reason");
     url.searchParams.delete("provider");
     window.history.replaceState({}, "", url.toString());
-  }, [loadProviderStatus, setProviderState]);
+  }, [loadProviderStatus, onIntegrationStatusChanged, setProviderState]);
 
   const handleConnect = useCallback(
     async (provider: IntegrationProvider) => {
@@ -146,12 +153,13 @@ export function IntegrationsSettingsPanel() {
           return;
         }
         await loadProviderStatus(provider);
+        onIntegrationStatusChanged?.();
       } finally {
         setProviderState(provider, { busy: false });
         endPageDataLoad();
       }
     },
-    [beginPageDataLoad, endPageDataLoad, loadProviderStatus, setProviderState]
+    [beginPageDataLoad, endPageDataLoad, loadProviderStatus, onIntegrationStatusChanged, setProviderState]
   );
 
   const handleRefresh = useCallback(
@@ -160,12 +168,13 @@ export function IntegrationsSettingsPanel() {
       beginPageDataLoad();
       try {
         await loadProviderStatus(provider);
+        onIntegrationStatusChanged?.();
       } finally {
         setProviderState(provider, { busy: false });
         endPageDataLoad();
       }
     },
-    [beginPageDataLoad, endPageDataLoad, loadProviderStatus, setProviderState]
+    [beginPageDataLoad, endPageDataLoad, loadProviderStatus, onIntegrationStatusChanged, setProviderState]
   );
 
   const cards = useMemo<

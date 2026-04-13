@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { invokeEdgeFunction } from "@/services/supabase/edgeFunctionInvoke";
 
 export type NautiljonRefreshResult = {
   ok: true;
@@ -8,22 +9,26 @@ export type NautiljonRefreshResult = {
   errors: Array<{ id: string; error: string }>;
 };
 
+type NautiljonRefreshPayload = {
+  ok?: boolean;
+  error?: string;
+  checked?: number;
+  changed?: number;
+  flagged?: number;
+  errors?: Array<{ id: string; error: string }>;
+};
+
 export async function runNautiljonRefresh(options?: {
   readingId?: string;
   force?: boolean;
   limit?: number;
 }): Promise<NautiljonRefreshResult> {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase.functions.invoke("nautiljon-refresh", {
-    body: {
-      reading_id: options?.readingId ?? null,
-      force: Boolean(options?.force),
-      limit: options?.limit ?? 50,
-    },
+  const data = await invokeEdgeFunction<NautiljonRefreshPayload>(supabase, "nautiljon-refresh", {
+    reading_id: options?.readingId ?? null,
+    force: Boolean(options?.force),
+    limit: options?.limit ?? 50,
   });
-  if (error) {
-    throw new Error(error.message);
-  }
   if (!data?.ok) {
     throw new Error(String(data?.error ?? "Erreur Nautiljon refresh."));
   }

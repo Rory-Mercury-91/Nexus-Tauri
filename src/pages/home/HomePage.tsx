@@ -49,6 +49,7 @@ export function HomePage() {
   );
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [readingVolumes, setReadingVolumes] = useState<Array<{ ownerId: string; volumeCount: number; totalCost: number }>>([]);
+  const [readingUniqueCount, setReadingUniqueCount] = useState(0);
 
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [category, setCategory] =
@@ -70,6 +71,7 @@ export function HomePage() {
       setProfiles(new Map(Object.entries(cached.profilesRecord)));
       setMemberIds(cached.memberIds);
       setReadingVolumes(cached.readingVolumes);
+      setReadingUniqueCount(cached.readingUniqueCount ?? 0);
       setLibraryProgress(cached.libraryProgress);
       setDataLoaded(true);
       if (isHomeDashboardCacheFresh(cached)) {
@@ -88,6 +90,7 @@ export function HomePage() {
       setProfiles(d.profiles);
       setMemberIds(d.memberIds);
       setReadingVolumes(d.readingVolumes);
+      setReadingUniqueCount(d.readingUniqueCount);
       setLibraryProgress(progress);
       setHomeDashboardCache(userId, {
         recurring: d.recurring,
@@ -95,6 +98,7 @@ export function HomePage() {
         profilesRecord: Object.fromEntries(d.profiles.entries()),
         memberIds: d.memberIds,
         readingVolumes: d.readingVolumes,
+        readingUniqueCount: d.readingUniqueCount,
         libraryProgress: progress,
       });
     } finally {
@@ -113,7 +117,13 @@ export function HomePage() {
     [recurring, oneOff, profiles, memberIds, userId, year, readingVolumes]
   );
 
-  const total = useMemo(() => buildTotalSummary(ownerCards), [ownerCards]);
+  const total = useMemo(() => {
+    const base = buildTotalSummary(ownerCards);
+    return {
+      ...base,
+      readingCount: readingUniqueCount,
+    };
+  }, [ownerCards, readingUniqueCount]);
 
   const chartData = useMemo(
     () =>

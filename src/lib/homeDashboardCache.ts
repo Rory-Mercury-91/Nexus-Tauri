@@ -14,6 +14,7 @@ export type CachedHomeDashboardPayload = {
   profilesRecord: Record<string, FamilyMemberProfile>;
   memberIds: string[];
   readingVolumes: Array<{ ownerId: string; volumeCount: number; totalCost: number }>;
+  readingUniqueCount: number;
   libraryProgress: LibraryProgressSnapshot | null;
   cachedAt: number;
 };
@@ -30,7 +31,12 @@ function safeParse(raw: string | null): CachedHomeDashboardPayload | null {
     if (!Array.isArray(value.recurring) || !Array.isArray(value.oneOff)) return null;
     if (!Array.isArray(value.memberIds) || !Array.isArray(value.readingVolumes)) return null;
     if (typeof value.profilesRecord !== "object" || value.profilesRecord === null) return null;
-    return value;
+    return {
+      ...value,
+      readingUniqueCount: Number.isFinite(value.readingUniqueCount)
+        ? Number(value.readingUniqueCount)
+        : 0,
+    };
   } catch {
     return null;
   }

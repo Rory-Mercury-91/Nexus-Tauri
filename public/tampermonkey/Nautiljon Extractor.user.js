@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nautiljon → Nexus-Tauri (Lectures VF)
 // @namespace    https://nexus-tauri.local
-// @version      2.0.1
+// @version      2.0.4
 // @description  Extrait les données des mangas/light novels depuis Nautiljon (édition VF uniquement) et les envoie vers Nexus-Tauri
 // @author       Nexus Team
 // @homepageURL  https://github.com/Rory-Mercury-91/Nexus-Tauri
@@ -260,23 +260,41 @@
   }
 
   // ============================================================================
-  // Extraction des volumes (édition VF uniquement)
+  // Extraction des volumes (VF : drapeau France ou bloc unique #edition_0)
   // ============================================================================
+  //
+  // Mises en page Nautiljon prises en charge :
+  // A) .bas_bloc > #edition_0 seul (sans ligne h2 « édition » / swap) — repli direct sur #edition_0.
+  // B) .bas_bloc > h2 > a.infos_edition avec drapeau France + onclick swap('edition_0') — on lit #edition_0
+  //    (ex. « Édition par défaut » FR+JP). Les blocs sans France (ex. « Édition US ») sont ignorés.
+  //
+
+  /** Repère l’édition française (VF) : drapeau France dans l’en-tête d’édition (h2 > a.infos_edition). */
+  function isFrenchEditionHeader(header) {
+    const imgs = header.querySelectorAll("img");
+    for (const img of imgs) {
+      const alt = normalizeSpace(img.getAttribute("alt") || "").toLowerCase();
+      const title = normalizeSpace(img.getAttribute("title") || "").toLowerCase();
+      if (alt === "france" || alt.includes("france") || title.includes("france")) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   function findFrenchEditionBlock() {
     const editionHeaders = Array.from(document.querySelectorAll("h2 a.infos_edition"));
 
     for (const header of editionHeaders) {
-      const flagFr = header.querySelector('img[alt="France"]');
-      if (flagFr) {
-        const editionId = header.getAttribute("onclick")?.match(/swap\('([^']+)'\)/)?.[1];
-        if (!editionId) continue;
+      if (!isFrenchEditionHeader(header)) continue;
 
-        const editionBlock = document.getElementById(editionId);
-        if (editionBlock) {
-          console.log("✅ Édition VF trouvée:", editionId);
-          return editionBlock;
-        }
+      const editionId = header.getAttribute("onclick")?.match(/swap\('([^']+)'\)/)?.[1];
+      if (!editionId) continue;
+
+      const editionBlock = document.getElementById(editionId);
+      if (editionBlock) {
+        console.log("✅ Édition VF trouvée:", editionId);
+        return editionBlock;
       }
     }
 
@@ -284,51 +302,124 @@
     return null;
   }
 
+  /**
+   * Bloc DOM contenant les listes de volumes (plusieurs éditions possibles, ou une seule #edition_0).
+   */
+  function findEditionBlockForImport() {
+    const fr = findFrenchEditionBlock();
+    if (fr) {
+      return fr;
+    }
+
+    const edition0 = document.getElementById("edition_0");
+    if (edition0 && edition0.querySelector(":scope > h3") && edition0.querySelector(".unVol")) {
+      console.log("✅ Bloc volumes édition unique (#edition_0, sans onglet drapeau)");
+      return edition0;
+    }
+
+    const bas =
+      document.querySelector(".top_bloc .bas_bloc") || document.querySelector(".bas_bloc");
+    if (bas) {
+      const first = bas.querySelector('div[id^="edition_"]');
+      if (first && first.querySelector(":scope > h3") && first.querySelector(".unVol")) {
+        console.log("✅ Bloc volumes (premier sous .bas_bloc):", first.id);
+        return first;
+      }
+    }
+
+    console.warn("⚠️ Aucun bloc d’édition volumes trouvé (#edition_0 / drapeau France)");
+    return null;
+  }
+
+  /** Numéro de tome pour Nexus (catalogue = un entier par tome ; doublons = on garde le premier). */
+  function parseVolumeNumberFromUnVol(anchor) {
+    const href = anchor.getAttribute("href") || "";
+    const titleAttr = anchor.getAttribute("title") || "";
+
+    const std = href.match(/\/volume-(\d+),/i);
+    if (std) {
+      const n = Number(std[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+
+    const fromTitle = titleAttr.match(/vol\.\s*(\d+)/i);
+    if (fromTitle) {
+      const n = Number(fromTitle[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+
+    const loose = href.match(/volume-(\d+)/i);
+    if (loose) {
+      const n = Number(loose[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+
+    const coffret = titleAttr.toLowerCase().match(/coffret[^0-9]*vol\.\s*(\d+)/i);
+    if (coffret) {
+      const n = Number(coffret[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+
+    return null;
+  }
+
+  /**
+   * Parcourt toutes les sous-sections (Volume simple, Spécial, Coffret, …).
+   * Déduplique par numéro : l’ordre DOM privilégie « Volume simple » (souvent en premier).
+   */
   function extractVolumesFromEdition(editionBlock) {
     if (!editionBlock) return [];
 
-    // Chercher la section "Volume simple"
-    const headers = Array.from(editionBlock.querySelectorAll("h3"));
-    const volumeSimpleHeader = headers.find((h) =>
-      normalizeSpace(h.textContent).toLowerCase().includes("volume simple")
+    const h3List = Array.from(editionBlock.querySelectorAll(":scope > h3"));
+    if (h3List.length === 0) {
+      console.warn("⚠️ Aucun titre de section (h3) dans le bloc édition");
+      return [];
+    }
+
+    const collected = [];
+
+    for (const h3 of h3List) {
+      const sectionName = normalizeSpace(h3.textContent);
+      const sectionDiv = h3.nextElementSibling;
+      if (!sectionDiv || sectionDiv.nodeType !== 1) {
+        continue;
+      }
+
+      const volumeNodes = Array.from(sectionDiv.querySelectorAll(".unVol"));
+      for (const node of volumeNodes) {
+        const anchor = node.querySelector("a[href*='/volume-']");
+        if (!anchor) continue;
+
+        const href = anchor.getAttribute("href") || "";
+        const volumeUrl = toAbsoluteUrl(href);
+        const volumeNumber = parseVolumeNumberFromUnVol(anchor);
+        if (volumeNumber == null) {
+          console.warn("⚠️ Numéro de tome non déduit:", sectionName, href.slice(0, 80));
+          continue;
+        }
+
+        collected.push({
+          numero: volumeNumber,
+          couverture_url: null,
+          page_url: volumeUrl,
+          date_sortie: null,
+          _section: sectionName,
+        });
+      }
+    }
+
+    const byNum = new Map();
+    for (const v of collected) {
+      if (!byNum.has(v.numero)) {
+        byNum.set(v.numero, v);
+      }
+    }
+
+    const volumes = Array.from(byNum.values()).map(({ _section, ...rest }) => rest);
+
+    console.log(
+      `📚 ${volumes.length} volume(s) retenu(s) (${h3List.length} section(s) ; doublons de numéro ignorés pour le catalogue)`
     );
-
-    if (!volumeSimpleHeader) {
-      console.warn("⚠️ Section 'Volume simple' non trouvée dans l'édition VF");
-      return [];
-    }
-
-    const sectionDiv = volumeSimpleHeader.nextElementSibling;
-    if (!sectionDiv) {
-      console.warn("⚠️ Div de la section 'Volume simple' non trouvée");
-      return [];
-    }
-
-    const volumeNodes = Array.from(sectionDiv.querySelectorAll(".unVol"));
-    const volumes = [];
-
-    for (const node of volumeNodes) {
-      const anchor = node.querySelector("a[href*='/volume-']");
-      if (!anchor) continue;
-
-      const href = anchor.getAttribute("href") || "";
-      const volumeUrl = toAbsoluteUrl(href);
-      const titleAttr = anchor.getAttribute("title") || "";
-      const numberMatch = titleAttr.match(/vol\.\s*(\d+)/i) || href.match(/volume-(\d+)/i);
-      if (!numberMatch) continue;
-
-      const volumeNumber = Number(numberMatch[1]);
-      if (!Number.isFinite(volumeNumber) || volumeNumber <= 0) continue;
-
-      volumes.push({
-        numero: volumeNumber,
-        couverture_url: null, // Sera rempli par fetchVolumeDates depuis la page individuelle
-        page_url: volumeUrl,
-        date_sortie: null, // Sera rempli par fetchVolumeDates
-      });
-    }
-
-    console.log(`📚 ${volumes.length} volume(s) VF trouvé(s) (section Volume simple)`);
     return volumes.sort((a, b) => a.numero - b.numero);
   }
 
@@ -513,7 +604,7 @@
 
     console.log("📖 Type de contenu:", typeContenu);
 
-    const editionBlock = findFrenchEditionBlock();
+    const editionBlock = findEditionBlockForImport();
     const volumes = extractVolumesFromEdition(editionBlock);
 
     if (volumes.length > 0) {

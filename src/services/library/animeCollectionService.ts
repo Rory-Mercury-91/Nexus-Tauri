@@ -1,4 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  coalesceFirstFiniteNumber,
+  extractNumEpisodesWatchedFromMalOfficialSnapshot,
+  mergeWatchProgressBySource,
+  resolveCanonicalWatchStatus,
+} from "@/services/library/readingProgressResolution";
 import { translateLibraryTerms } from "@/services/library/termTranslations";
 
 export type AnimeCollectionEntry = {
@@ -191,10 +197,34 @@ export async function updateAnimeWatchStatus(
   userStatus: AnimeCollectionEntry["userStatus"]
 ) {
   const watchStatus = mapUserStatusToWatchStatus(userStatus);
+  const { data: row } = await supabase
+    .from("library_anime")
+    .select("watch_progress_by_source, mal_official_snapshot")
+    .eq("id", rowId)
+    .maybeSingle();
+  const prevBy = (row?.watch_progress_by_source ?? {}) as Record<string, unknown>;
+  let merged = mergeWatchProgressBySource(prevBy, "nexus", {
+    watch_status: watchStatus,
+    updated_at: new Date().toISOString(),
+  });
+  const nex = { ...(merged.nexus as Record<string, unknown> | undefined) };
+  if (nex.episodes_watched == null) {
+    const ep = coalesceFirstFiniteNumber(
+      (prevBy.nexus as Record<string, unknown> | undefined)?.episodes_watched,
+      (merged.mal as Record<string, unknown> | undefined)?.episodes_watched,
+      extractNumEpisodesWatchedFromMalOfficialSnapshot(row?.mal_official_snapshot)
+    );
+    if (ep != null) {
+      nex.episodes_watched = ep;
+    }
+  }
+  merged = { ...merged, nexus: nex };
+  const canonical = resolveCanonicalWatchStatus(merged) ?? watchStatus;
   const { error } = await supabase
     .from("library_anime")
     .update({
-      watch_status: watchStatus,
+      watch_progress_by_source: merged,
+      watch_status: canonical,
       updated_at: new Date().toISOString(),
     })
     .eq("id", rowId);
@@ -337,16 +367,16 @@ export async function createManualAnimeEntry(
       },
     },
   };
-  const { error } = await supabase.from("library_anime").insert({
-    mal_id: malId,
-    title,
-    title_english: String(full.title_english ?? title),
-    watch_status: mapUserStatusToWatchStatus(userStatus),
-    is_favorite: favorite,
-    main_picture_url: imageUrl || null,
-    jikan_snapshot: { full, pictures: [], episodes: [] },
-    mal_official_snapshot: malSnapshot,
-    updated_at: new Date().toISOString(),
+  const { error } = await supabase.rpc("upsert_library_anime_entry", {
+    p_mal_id: malId,
+    p_title: title,
+    p_title_english: String(full.title_english ?? title),
+    p_main_picture_url: imageUrl || null,
+    p_jikan_snapshot: { full, pictures: [], episodes: [] },
+    p_mal_official_snapshot: malSnapshot,
+    p_watch_status: mapUserStatusToWatchStatus(userStatus),
+    p_is_favorite: favorite,
+    p_user_notes: "",
   });
   if (error) {
     throw new Error(error.message);

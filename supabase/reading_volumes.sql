@@ -1,6 +1,10 @@
 -- =============================================================================
 -- Nexus-Tauri — Lectures: tomes + répartition des coûts par propriétaire
 -- =============================================================================
+-- ⚠️ DÉPRÉCIÉ — Ne pas utiliser sur les nouveaux déploiements.
+-- Remplacé par : nexus_install_volumes_v2.sql (catalogue + foyer + état perso).
+-- Voir supabase/NEXUS_DATABASE_SETUP.md
+-- =============================================================================
 
 create table if not exists public.reading_volumes (
   id uuid primary key default gen_random_uuid(),

@@ -11,8 +11,36 @@ export type NautiljonImportEnvelope = {
 export type ReadingImportTarget = {
   id: string;
   malMangaId: number;
+  /** Titre affiché (aligné sur la fiche détail / collection : VF, puis Jikan, puis colonne title). */
   title: string;
 };
+
+/** Même priorité que ReadingDetailPage / grille collection pour le libellé. */
+export function resolveReadingRowDisplayTitle(row: {
+  title?: unknown;
+  mal_official_snapshot?: unknown;
+  jikan_snapshot?: unknown;
+}): string {
+  const mal = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
+  const jikan = (row.jikan_snapshot ?? {}) as Record<string, unknown>;
+  const manualOverrides = (mal.manual_overrides ?? {}) as Record<string, unknown>;
+  const full = (jikan.full ?? jikan.data ?? {}) as Record<string, unknown>;
+  const manualTitleFr = String(manualOverrides.title_fr ?? "").trim();
+  const manualTitreOriginal = String(manualOverrides.titre_original ?? "").trim();
+  const titleEnglish = String(full.title_english ?? "").trim();
+  const titleJapanese = String(full.title_japanese ?? "").trim();
+  const jikanTitle = String(full.title ?? "").trim();
+  const dbTitle = String(row.title ?? "").trim();
+  return (
+    manualTitleFr ||
+    titleEnglish ||
+    manualTitreOriginal ||
+    titleJapanese ||
+    jikanTitle ||
+    dbTitle ||
+    "—"
+  );
+}
 
 type NautiljonVolumePayload = {
   numero?: unknown;
@@ -74,30 +102,37 @@ function normalizeVolumes(value: unknown): NautiljonVolumePayload[] {
 export async function fetchReadingImportTargets(supabase: SupabaseClient): Promise<ReadingImportTarget[]> {
   const { data, error } = await supabase
     .from("library_reading")
-    .select("id, mal_manga_id, title")
-    .order("title", { ascending: true });
+    .select("id, mal_manga_id, title, mal_official_snapshot, jikan_snapshot")
+    .order("updated_at", { ascending: false });
   if (error) {
     throw new Error(error.message);
   }
-  return (data ?? []).map((row) => ({
-    id: String(row.id),
-    malMangaId: Number(row.mal_manga_id ?? 0),
-    title: String(row.title ?? "—"),
+  const mapped = (data ?? []).map((row) => ({
+    id: String((row as { id: unknown }).id),
+    malMangaId: Number((row as { mal_manga_id?: unknown }).mal_manga_id ?? 0),
+    title: resolveReadingRowDisplayTitle(row as Record<string, unknown>),
   }));
+  mapped.sort((a, b) => a.title.localeCompare(b.title, "fr", { sensitivity: "base" }));
+  return mapped;
 }
 
 export async function applyNautiljonImportToReading(
   supabase: SupabaseClient,
   targetReadingId: string,
-  envelope: NautiljonImportEnvelope
+  envelope: NautiljonImportEnvelope,
+  options?: { familyId?: string | null }
 ): Promise<{ volumesUpserted: number }> {
   const { data: existingRow, error: existingError } = await supabase
     .from("library_reading")
-    .select("id, title, mal_official_snapshot, jikan_snapshot")
+    .select("id, mal_manga_id, title, mal_official_snapshot, jikan_snapshot")
     .eq("id", targetReadingId)
     .single();
   if (existingError || !existingRow) {
     throw new Error(existingError?.message ?? "Fiche lecture introuvable.");
+  }
+  const malMangaId = Number((existingRow as { mal_manga_id?: unknown }).mal_manga_id ?? 0);
+  if (!Number.isFinite(malMangaId) || malMangaId <= 0) {
+    throw new Error("mal_manga_id manquant sur la fiche lecture.");
   }
 
   const payload = envelope.payload;
@@ -207,6 +242,7 @@ export async function applyNautiljonImportToReading(
     throw new Error(updateError.message);
   }
 
+  const familyId = options?.familyId ?? null;
   const payloadVolumes = normalizeVolumes(payload.volumes);
   let volumesUpserted = 0;
   for (const rawVolume of payloadVolumes) {
@@ -216,7 +252,8 @@ export async function applyNautiljonImportToReading(
     }
     await upsertReadingVolume(supabase, {
       readingId: targetReadingId,
-      familyId: null,
+      malMangaId,
+      familyId,
       volumeNumber,
       volumeType: toStringValue(payload.type_volume) || "standard",
       imageUrl: toStringValue(rawVolume.couverture_url) || null,

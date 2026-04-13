@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/common/Modal";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { useSession } from "@/hooks/useSession";
 import { notifyToast } from "@/lib/toastEvents";
+import { listMyFamilies } from "@/services/family/familyService";
 import {
   applyNautiljonImportToReading,
   fetchReadingImportTargets,
@@ -16,6 +18,7 @@ type ImportProgressPayload = {
 };
 
 export function NautiljonImportReceptionModal() {
+  const { session } = useSession();
   const [pending, setPending] = useState<NautiljonImportEnvelope | null>(null);
   const [targets, setTargets] = useState<ReadingImportTarget[]>([]);
   const [loadingTargets, setLoadingTargets] = useState(false);
@@ -58,8 +61,22 @@ export function NautiljonImportReceptionModal() {
 
   useEffect(() => {
     void refreshPendingFromTauri();
+  }, [refreshPendingFromTauri]);
+
+  /** RLS Supabase : sans session utilisateur, library_reading renvoie 0 ligne — on recharge quand la session est prête. */
+  useEffect(() => {
+    if (!session?.user?.id) {
+      return;
+    }
     void refreshTargets();
-  }, [refreshPendingFromTauri, refreshTargets]);
+  }, [session?.user?.id, refreshTargets]);
+
+  useEffect(() => {
+    if (!pending || !session?.user?.id) {
+      return;
+    }
+    void refreshTargets();
+  }, [pending?.received_at, pending, session?.user?.id, refreshTargets]);
 
   useEffect(() => {
     let unlistenProgress: (() => void) | undefined;
@@ -115,13 +132,17 @@ export function NautiljonImportReceptionModal() {
   }
 
   async function handleApplyImport() {
-    if (!pending || !selectedTargetId) {
+    if (!pending || !selectedTargetId || !session?.user?.id) {
       return;
     }
     setApplying(true);
     try {
       const supabase = getSupabaseClient();
-      const result = await applyNautiljonImportToReading(supabase, selectedTargetId, pending);
+      const families = await listMyFamilies(supabase);
+      const familyId = families[0]?.id ?? null;
+      const result = await applyNautiljonImportToReading(supabase, selectedTargetId, pending, {
+        familyId,
+      });
       await clearPendingAndClose();
       notifyToast({
         kind: "success",
@@ -170,6 +191,16 @@ export function NautiljonImportReceptionModal() {
         </div>
 
         <div className="nautiljon-import-targets">
+          {!session?.user?.id ? (
+            <p className="nautiljon-import-auth-hint" role="status">
+              Connecte-toi pour charger tes fiches lectures depuis la base.
+            </p>
+          ) : null}
+          {session?.user?.id && !loadingTargets && targets.length === 0 ? (
+            <p className="nautiljon-import-empty-hint" role="status">
+              Aucune fiche lecture trouvée. Vérifie que tu es connecté avec le compte qui possède la collection.
+            </p>
+          ) : null}
           <label className="nautiljon-import-field">
             <span>Rechercher une fiche lecture</span>
             <input
@@ -185,7 +216,7 @@ export function NautiljonImportReceptionModal() {
               value={selectedTargetId}
               onChange={(event) => setSelectedTargetId(event.target.value)}
               className="nautiljon-import-select"
-              disabled={loadingTargets || applying}
+              disabled={loadingTargets || applying || !session?.user?.id}
             >
               <option value="">Sélectionner une fiche…</option>
               {filteredTargets.map((entry) => (
@@ -207,7 +238,7 @@ export function NautiljonImportReceptionModal() {
           <button
             type="button"
             className="library-add-anime-btn"
-            disabled={!selectedTargetId || applying}
+            disabled={!selectedTargetId || applying || !session?.user?.id}
             onClick={() => void handleApplyImport()}
           >
             {applying ? "Application…" : "Appliquer l'import VF"}

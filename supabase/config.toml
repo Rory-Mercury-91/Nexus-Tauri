@@ -1,0 +1,47 @@
+# Configuration Edge Functions (Supabase CLI).
+# https://supabase.com/docs/guides/functions/function-configuration
+#
+# Désactive la vérification JWT au niveau de la gateway (Kong). Sans cela, certains projets
+# renvoient « Invalid JWT » sur /functions/v1 alors que Auth et PostgREST acceptent la même session
+# (ex. migration clés JWT / comportement gateway).
+#
+# Chaque handler valide quand même l’utilisateur via requireUserId() → getUser(token) dans Deno.
+
+[functions.external-reading-list-delete]
+verify_jwt = false
+
+[functions.integration-connection-status]
+verify_jwt = false
+
+[functions.integration-disconnect]
+verify_jwt = false
+
+[functions.integration-oauth-callback]
+verify_jwt = false
+
+[functions.integration-start-connect]
+verify_jwt = false
+
+[functions.mal-official-bundle]
+verify_jwt = false
+
+[functions.nautiljon-refresh]
+verify_jwt = false
+
+[functions.reading-list-diagnostics]
+verify_jwt = false
+
+[functions.sync-import-preview]
+verify_jwt = false
+
+[functions.sync-cancel]
+verify_jwt = false
+
+[functions.sync-start]
+verify_jwt = false
+
+[functions.sync-status]
+verify_jwt = false
+
+[functions.sync-worker]
+verify_jwt = false

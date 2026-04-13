@@ -1,4 +1,12 @@
 import { corsHeaders, jsonResponse } from "../_shared/integration-helpers.ts";
+import {
+  mapAnilistMediaListStatusToMalCodes,
+  mapAnilistMediaListStatusToWatchCodes,
+  mergeReadingProgressBySource,
+  mergeWatchProgressBySource,
+  resolveCanonicalReadStatus,
+  resolveCanonicalWatchStatus,
+} from "../_shared/reading-progress-resolve.ts";
 import { createServiceSupabaseClient, nowIso, type SyncSource } from "../_shared/sync-helpers.ts";
 
 type JobRow = {
@@ -77,13 +85,23 @@ const JIKAN_API = "https://api.jikan.moe/v4";
 const MAL_API = "https://api.myanimelist.net/v2";
 const MAX_RETRIES = 3;
 const MAX_JOBS_PER_TICK = 25;
+/** Jobs « running » sans mise à jour (crash / timeout Edge) → repasse en retry après ce délai. */
 const RUNNING_STALE_MS = 3 * 60 * 1000;
-const IMPORT_PAGE_SIZE = 100;
-const IMPORT_ANILIST_CHUNK_SIZE = 120;
+/** Lots courts : un job d’import doit finir sous la limite Edge (~150s) ; 100 lignes × plusieurs allers-retours DB dépassaient souvent. */
+const IMPORT_PAGE_SIZE = 25;
+const IMPORT_ANILIST_CHUNK_SIZE = 25;
 const MAX_EPISODE_PAGES = 40;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const RUN_CANCELLED_MSG = "RUN_CANCELLED";
+
+async function isRunCancelled(runId: string): Promise<boolean> {
+  const admin = createServiceSupabaseClient();
+  const { data: run } = await admin.from("sync_runs").select("status").eq("id", runId).maybeSingle();
+  return String(run?.status ?? "") === "cancelled";
 }
 
 async function fetchJson(url: string, init?: RequestInit) {
@@ -196,32 +214,60 @@ async function claimNextJob(): Promise<JobRow | null> {
       .eq("status", "running");
   }
 
-  const { data: candidate } = await admin
-    .from("sync_jobs")
-    .select("id, run_id, user_id, stage, attempts, payload, status, available_at")
-    .in("status", ["queued", "retry"])
-    .lte("available_at", nowIso())
-    .order("id", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (!candidate) {
-    return null;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const { data: candidate } = await admin
+      .from("sync_jobs")
+      .select("id, run_id, user_id, stage, attempts, payload, status, available_at")
+      .in("status", ["queued", "retry"])
+      .lte("available_at", nowIso())
+      .order("id", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!candidate) {
+      return null;
+    }
+    const { data: run } = await admin.from("sync_runs").select("status").eq("id", candidate.run_id).maybeSingle();
+    if (!run) {
+      await admin
+        .from("sync_jobs")
+        .update({
+          status: "failed",
+          finished_at: nowIso(),
+          last_error: "Run introuvable.",
+          updated_at: nowIso(),
+        })
+        .eq("id", candidate.id);
+      continue;
+    }
+    if (run.status === "cancelled") {
+      await admin
+        .from("sync_jobs")
+        .update({
+          status: "cancelled",
+          finished_at: nowIso(),
+          last_error: "Run annulé.",
+          updated_at: nowIso(),
+        })
+        .eq("id", candidate.id);
+      continue;
+    }
+    const { data: locked } = await admin
+      .from("sync_jobs")
+      .update({
+        status: "running",
+        started_at: nowIso(),
+        updated_at: nowIso(),
+      })
+      .eq("id", candidate.id)
+      .in("status", ["queued", "retry"])
+      .select("id, run_id, user_id, stage, attempts, payload")
+      .maybeSingle();
+    if (!locked) {
+      continue;
+    }
+    return locked as JobRow;
   }
-  const { data: locked } = await admin
-    .from("sync_jobs")
-    .update({
-      status: "running",
-      started_at: nowIso(),
-      updated_at: nowIso(),
-    })
-    .eq("id", candidate.id)
-    .in("status", ["queued", "retry"])
-    .select("id, run_id, user_id, stage, attempts, payload")
-    .maybeSingle();
-  if (!locked) {
-    return null;
-  }
-  return locked as JobRow;
+  return null;
 }
 
 async function mapMalPage(accessToken: string, offset: number, limit = IMPORT_PAGE_SIZE) {
@@ -261,7 +307,10 @@ type JikanEnrichPayload = {
   episodes: Array<Record<string, unknown>>;
 };
 
-async function fetchJikanEnrichPayload(malId: number): Promise<JikanEnrichPayload> {
+async function fetchJikanEnrichPayload(
+  malId: number,
+  onHeartbeat?: () => Promise<void>
+): Promise<JikanEnrichPayload> {
   await sleep(900);
   const fullJson = (await fetchJson(`${JIKAN_API}/anime/${malId}/full`)) as { data?: Record<string, unknown> };
 
@@ -281,6 +330,9 @@ async function fetchJikanEnrichPayload(malId: number): Promise<JikanEnrichPayloa
     if (!episodesJson.pagination?.has_next_page || chunk.length === 0) {
       break;
     }
+    if (onHeartbeat && page % 3 === 0) {
+      await onHeartbeat().catch(() => undefined);
+    }
   }
 
   return {
@@ -290,8 +342,12 @@ async function fetchJikanEnrichPayload(malId: number): Promise<JikanEnrichPayloa
   };
 }
 
-async function fetchJikanReadingEnrichPayload(malId: number): Promise<Record<string, unknown>> {
+async function fetchJikanReadingEnrichPayload(
+  malId: number,
+  onHeartbeat?: () => Promise<void>
+): Promise<Record<string, unknown>> {
   await sleep(900);
+  await onHeartbeat?.().catch(() => undefined);
   const fullJson = (await fetchJson(`${JIKAN_API}/manga/${malId}/full`)) as { data?: Record<string, unknown> };
   return { full: fullJson.data ?? {} };
 }
@@ -309,7 +365,7 @@ async function mapAniListRows(accessToken: string) {
   const query = `
     query ($userId: Int) {
       MediaListCollection(type: ANIME, userId: $userId) {
-        lists { entries { status media { idMal title { romaji english } coverImage { large medium } } } }
+        lists { entries { status progress media { idMal title { romaji english } coverImage { large medium } } } }
       }
     }
   `;
@@ -335,7 +391,7 @@ async function mapAniListReadingRows(accessToken: string) {
   const query = `
     query ($userId: Int) {
       MediaListCollection(type: MANGA, userId: $userId) {
-        lists { entries { status media { idMal title { romaji english } coverImage { large medium } chapters volumes } } }
+        lists { entries { status progress media { idMal title { romaji english } coverImage { large medium } chapters volumes } } }
       }
     }
   `;
@@ -365,6 +421,9 @@ async function processImport(job: JobRow) {
   const source = String(job.payload.source ?? "mal") as SyncSource;
   const mediaType = String(job.payload.media_type ?? "anime") as "anime" | "reading";
   const selectedFieldIds = getSelectedFieldIds(job.payload);
+  const rawTarget = job.payload.target_mal_id;
+  const targetMalId = Number(rawTarget);
+  const hasTarget = Number.isFinite(targetMalId) && targetMalId > 0;
   const admin = createServiceSupabaseClient();
   const { data: conn, error: connError } = await admin
     .from("oauth_connections")
@@ -406,6 +465,7 @@ async function processImport(job: JobRow) {
         media_type: mediaType,
         offset: safeOffset + IMPORT_PAGE_SIZE,
         selected_field_ids: selectedFieldIds,
+        ...(hasTarget ? { target_mal_id: targetMalId } : {}),
       };
     }
   } else {
@@ -415,16 +475,34 @@ async function processImport(job: JobRow) {
         ? await mapAniListReadingRows(conn.access_token)
         : await mapAniListRows(conn.access_token);
     const safeStart = Number.isFinite(startIndex) ? Math.max(0, startIndex) : 0;
-    rows = allRows.slice(safeStart, safeStart + IMPORT_ANILIST_CHUNK_SIZE);
-    hasNextImportBatch = safeStart + IMPORT_ANILIST_CHUNK_SIZE < allRows.length;
-    batchTotalHint = allRows.length;
-    if (hasNextImportBatch) {
-      nextPayload = {
-        source,
-        media_type: mediaType,
-        start_index: safeStart + IMPORT_ANILIST_CHUNK_SIZE,
-        selected_field_ids: selectedFieldIds,
-      };
+    if (hasTarget) {
+      const hit = allRows.find((row) => {
+        const node = row.media as Record<string, unknown> | undefined;
+        const mid = Number(node?.idMal);
+        return Number.isFinite(mid) && mid === targetMalId;
+      });
+      if (hit) {
+        rows = [hit];
+        hasNextImportBatch = false;
+        nextPayload = null;
+      } else {
+        rows = [];
+        hasNextImportBatch = false;
+        nextPayload = null;
+      }
+      batchTotalHint = allRows.length;
+    } else {
+      rows = allRows.slice(safeStart, safeStart + IMPORT_ANILIST_CHUNK_SIZE);
+      hasNextImportBatch = safeStart + IMPORT_ANILIST_CHUNK_SIZE < allRows.length;
+      batchTotalHint = allRows.length;
+      if (hasNextImportBatch) {
+        nextPayload = {
+          source,
+          media_type: mediaType,
+          start_index: safeStart + IMPORT_ANILIST_CHUNK_SIZE,
+          selected_field_ids: selectedFieldIds,
+        };
+      }
     }
   }
   const importTotal = Math.max(currentImportProgress?.total ?? 0, batchTotalHint, processed);
@@ -436,11 +514,25 @@ async function processImport(job: JobRow) {
     error_count: currentImportProgress?.error_count ?? 0,
     current_item_label: null,
   });
+
+  let targetMatched = false;
+  /** Enrich/traduction en fin de lot : le job « import » suivant doit être inséré avant (id plus petit) pour finir toute la liste avant Jikan. */
+  const deferredEnrich: Array<{ mal_id: number; title: string; media_type: "anime" | "reading" }> = [];
+  const deferredTranslate: Array<{ mal_id: number; title: string; media_type: "anime" | "reading" }> = [];
   for (const row of rows) {
+    if (await isRunCancelled(job.run_id)) {
+      throw new Error(RUN_CANCELLED_MSG);
+    }
     const node = source === "mal" ? (row.node as Record<string, unknown> | undefined) : (row.media as Record<string, unknown> | undefined);
     const malId = Number(source === "mal" ? node?.id : node?.idMal);
     if (!Number.isFinite(malId) || malId <= 0) {
       continue;
+    }
+    if (hasTarget && malId !== targetMalId) {
+      continue;
+    }
+    if (hasTarget) {
+      targetMatched = true;
     }
     const title = String(source === "mal" ? node?.title ?? "" : (node?.title as Record<string, unknown> | undefined)?.romaji ?? "");
     if (!title) {
@@ -452,12 +544,60 @@ async function processImport(job: JobRow) {
     const picture = source === "mal"
       ? ((node?.main_picture as Record<string, unknown> | undefined)?.medium as string | undefined) ?? null
       : ((node?.coverImage as Record<string, unknown> | undefined)?.large as string | undefined) ?? null;
-    const watchStatus = source === "mal"
+    const malListStatusRaw = source === "mal"
       ? String((row.list_status as Record<string, unknown> | undefined)?.status ?? "")
-      : null;
-    const readStatus = source === "mal"
-      ? String((row.list_status as Record<string, unknown> | undefined)?.status ?? "")
-      : null;
+      : "";
+    const aniListStatusRaw = source === "anilist" ? String(row.status ?? "") : "";
+
+    let incomingReadStatus: string | null = null;
+    let incomingWatchStatus: string | null = null;
+    if (mediaType === "reading") {
+      if (source === "mal") {
+        incomingReadStatus = malListStatusRaw || null;
+      } else {
+        incomingReadStatus = mapAnilistMediaListStatusToMalCodes(aniListStatusRaw);
+      }
+    } else if (source === "mal") {
+      incomingWatchStatus = malListStatusRaw || null;
+    } else {
+      incomingWatchStatus = mapAnilistMediaListStatusToWatchCodes(aniListStatusRaw);
+    }
+
+    let incomingChaptersRead: number | null = null;
+    let incomingEpisodesWatched: number | null = null;
+    if (mediaType === "reading") {
+      if (source === "mal") {
+        const ls = row.list_status as Record<string, unknown> | undefined;
+        const n = ls?.num_chapters_read;
+        incomingChaptersRead =
+          typeof n === "number" ? n : typeof n === "string" ? Number(n) : null;
+        if (incomingChaptersRead != null && !Number.isFinite(incomingChaptersRead)) {
+          incomingChaptersRead = null;
+        }
+      } else {
+        const p = row.progress;
+        incomingChaptersRead =
+          typeof p === "number" ? p : typeof p === "string" ? Number(p) : null;
+        if (incomingChaptersRead != null && !Number.isFinite(incomingChaptersRead)) {
+          incomingChaptersRead = null;
+        }
+      }
+    } else if (source === "mal") {
+      const ls = row.list_status as Record<string, unknown> | undefined;
+      const n = ls?.num_episodes_watched;
+      incomingEpisodesWatched =
+        typeof n === "number" ? n : typeof n === "string" ? Number(n) : null;
+      if (incomingEpisodesWatched != null && !Number.isFinite(incomingEpisodesWatched)) {
+        incomingEpisodesWatched = null;
+      }
+    } else {
+      const p = row.progress;
+      incomingEpisodesWatched =
+        typeof p === "number" ? p : typeof p === "string" ? Number(p) : null;
+      if (incomingEpisodesWatched != null && !Number.isFinite(incomingEpisodesWatched)) {
+        incomingEpisodesWatched = null;
+      }
+    }
 
     const targetTable = mediaType === "reading" ? "library_reading" : "library_anime";
     const malIdCol = mediaType === "reading" ? "mal_manga_id" : "mal_id";
@@ -465,8 +605,8 @@ async function processImport(job: JobRow) {
 
     const existingSelect =
       mediaType === "reading"
-        ? "id, title, title_english, main_picture_url, read_status, mal_official_snapshot"
-        : "id, title, title_english, main_picture_url, watch_status, mal_official_snapshot";
+        ? "id, title, title_english, main_picture_url, read_status, mal_official_snapshot, reading_progress_by_source"
+        : "id, title, title_english, main_picture_url, watch_status, mal_official_snapshot, watch_progress_by_source";
     const { data: existing } = await admin
       .from(targetTable)
       .select(existingSelect)
@@ -502,27 +642,78 @@ async function processImport(job: JobRow) {
     const nextPicture = canUpdateField(selectedFieldIds, "title")
       ? (picture || cachedByMal?.main_picture_url || null)
       : ((existing?.main_picture_url as string | null | undefined) ?? picture ?? cachedByMal?.main_picture_url ?? null);
-    const nextStatus = canUpdateField(selectedFieldIds, "status")
-      ? (mediaType === "reading" ? readStatus : watchStatus)
-      : mediaType === "reading"
-      ? ((existing?.read_status as string | null | undefined) ?? readStatus)
-      : ((existing?.watch_status as string | null | undefined) ?? watchStatus);
 
-    await admin.from(targetTable).upsert(
-      {
-        user_id: job.user_id,
-        [malIdCol]: malId,
-        title: nextTitle,
-        title_english: nextTitleEnglish,
-        main_picture_url: nextPicture,
-        [statusCol]: nextStatus,
-        jikan_snapshot: cachedJikanSnapshot ?? {},
-        jikan_snapshot_at: cachedByMal?.jikan_snapshot_at ?? null,
-        mal_official_snapshot: mergedSnapshot,
-        mal_official_snapshot_at: nowIso(),
-      },
-      { onConflict: mediaType === "reading" ? "user_id,mal_manga_id" : "user_id,mal_id" }
-    );
+    const sourceKey = source === "mal" ? "mal" : "anilist";
+    const ts = nowIso();
+
+    let nextReadingProgress: Record<string, unknown> =
+      mediaType === "reading"
+        ? ((existing as { reading_progress_by_source?: unknown } | null)?.reading_progress_by_source as Record<
+            string,
+            unknown
+          >) ?? {}
+        : {};
+    let nextWatchProgress: Record<string, unknown> =
+      mediaType === "anime"
+        ? ((existing as { watch_progress_by_source?: unknown } | null)?.watch_progress_by_source as Record<
+            string,
+            unknown
+          >) ?? {}
+        : {};
+
+    if (mediaType === "reading" && canUpdateField(selectedFieldIds, "status") && incomingReadStatus) {
+      const patch: Record<string, unknown> = {
+        read_status: incomingReadStatus,
+        updated_at: ts,
+      };
+      if (incomingChaptersRead !== null) {
+        patch.chapters_read = incomingChaptersRead;
+      }
+      nextReadingProgress = mergeReadingProgressBySource(nextReadingProgress, sourceKey, patch);
+    }
+    if (mediaType === "anime" && canUpdateField(selectedFieldIds, "status") && incomingWatchStatus) {
+      const patch: Record<string, unknown> = {
+        watch_status: incomingWatchStatus,
+        updated_at: ts,
+      };
+      if (incomingEpisodesWatched !== null) {
+        patch.episodes_watched = incomingEpisodesWatched;
+      }
+      nextWatchProgress = mergeWatchProgressBySource(nextWatchProgress, sourceKey, patch);
+    }
+
+    const canonicalRead = resolveCanonicalReadStatus(nextReadingProgress);
+    const canonicalWatch = resolveCanonicalWatchStatus(nextWatchProgress);
+
+    const nextStatus = canUpdateField(selectedFieldIds, "status")
+      ? (mediaType === "reading"
+        ? (canonicalRead ?? (existing?.read_status as string | null | undefined) ?? null)
+        : (canonicalWatch ?? (existing?.watch_status as string | null | undefined) ?? null))
+      : mediaType === "reading"
+      ? ((existing?.read_status as string | null | undefined) ?? null)
+      : ((existing?.watch_status as string | null | undefined) ?? null);
+
+    const upsertPayload: Record<string, unknown> = {
+      user_id: job.user_id,
+      [malIdCol]: malId,
+      title: nextTitle,
+      title_english: nextTitleEnglish,
+      main_picture_url: nextPicture,
+      [statusCol]: nextStatus,
+      jikan_snapshot: cachedJikanSnapshot ?? {},
+      jikan_snapshot_at: cachedByMal?.jikan_snapshot_at ?? null,
+      mal_official_snapshot: mergedSnapshot,
+      mal_official_snapshot_at: nowIso(),
+    };
+    if (mediaType === "reading") {
+      upsertPayload.reading_progress_by_source = nextReadingProgress;
+    } else {
+      upsertPayload.watch_progress_by_source = nextWatchProgress;
+    }
+
+    await admin.from(targetTable).upsert(upsertPayload, {
+      onConflict: mediaType === "reading" ? "user_id,mal_manga_id" : "user_id,mal_id",
+    });
     processed += 1;
     if (existing) {
       updated += 1;
@@ -550,19 +741,9 @@ async function processImport(job: JobRow) {
     const needsAnimeEnrich = !hasFull || !hasPicturesFetched || !hasEpisodesFetched;
     const needsReadingEnrich = !hasFull;
     if ((mediaType === "anime" && needsAnimeEnrich) || (mediaType === "reading" && needsReadingEnrich)) {
-      await enqueue(job.run_id, job.user_id, "enrich", {
-        mal_id: malId,
-        title,
-        media_type: mediaType,
-        selected_field_ids: selectedFieldIds,
-      });
+      deferredEnrich.push({ mal_id: malId, title, media_type: mediaType });
     } else if (!hasTranslatedSynopsis) {
-      await enqueue(job.run_id, job.user_id, "translate", {
-        mal_id: malId,
-        title,
-        media_type: mediaType,
-        selected_field_ids: selectedFieldIds,
-      });
+      deferredTranslate.push({ mal_id: malId, title, media_type: mediaType });
     }
     await upsertProgress(job.run_id, job.user_id, "import", {
       total: importTotal,
@@ -571,13 +752,20 @@ async function processImport(job: JobRow) {
       updated_count: updated,
       current_item_label: title,
     });
-    if (processed % 25 === 0) {
+    if (processed % 5 === 0) {
       await admin
         .from("sync_jobs")
         .update({ updated_at: nowIso() })
         .eq("id", job.id)
         .eq("status", "running");
     }
+  }
+  if (hasTarget && targetMatched) {
+    hasNextImportBatch = false;
+    nextPayload = null;
+  }
+  if (await isRunCancelled(job.run_id)) {
+    throw new Error(RUN_CANCELLED_MSG);
   }
   if (nextPayload) {
     await admin.from("sync_jobs").insert({
@@ -588,6 +776,22 @@ async function processImport(job: JobRow) {
       attempts: 0,
       payload: nextPayload,
       available_at: nowIso(),
+    });
+  }
+  for (const p of deferredEnrich) {
+    await enqueue(job.run_id, job.user_id, "enrich", {
+      mal_id: p.mal_id,
+      title: p.title,
+      media_type: p.media_type,
+      selected_field_ids: selectedFieldIds,
+    });
+  }
+  for (const p of deferredTranslate) {
+    await enqueue(job.run_id, job.user_id, "translate", {
+      mal_id: p.mal_id,
+      title: p.title,
+      media_type: p.media_type,
+      selected_field_ids: selectedFieldIds,
     });
   }
   await upsertProgress(job.run_id, job.user_id, "enrich", {
@@ -628,9 +832,27 @@ async function processEnrich(job: JobRow) {
   if (!anime) {
     throw new Error("Entrée introuvable.");
   }
+  if (await isRunCancelled(job.run_id)) {
+    throw new Error(RUN_CANCELLED_MSG);
+  }
+  const titleLabel = String(anime.title ?? job.payload.title ?? "");
+  const heartbeat = async () => {
+    if (await isRunCancelled(job.run_id)) {
+      throw new Error(RUN_CANCELLED_MSG);
+    }
+    await admin
+      .from("sync_jobs")
+      .update({ updated_at: nowIso() })
+      .eq("id", job.id)
+      .eq("status", "running");
+    await upsertProgress(job.run_id, job.user_id, "enrich", {
+      current_item_label: titleLabel,
+    });
+  };
+  await heartbeat();
   const payload = mediaType === "reading"
-    ? await fetchJikanReadingEnrichPayload(malId)
-    : await fetchJikanEnrichPayload(malId);
+    ? await fetchJikanReadingEnrichPayload(malId, heartbeat)
+    : await fetchJikanEnrichPayload(malId, heartbeat);
   const previousSnapshot = (anime.jikan_snapshot ?? {}) as Record<string, unknown>;
   const previousEnrichMeta = (previousSnapshot.enrich_meta ?? {}) as Record<string, unknown>;
   const previousFull = (previousSnapshot.full ?? {}) as Record<string, unknown>;
@@ -700,6 +922,9 @@ async function processTranslate(job: JobRow) {
   if (!anime) {
     throw new Error("Entrée introuvable.");
   }
+  if (await isRunCancelled(job.run_id)) {
+    throw new Error(RUN_CANCELLED_MSG);
+  }
   const sourceSynopsis =
     String((anime.mal_official_snapshot as Record<string, unknown> | undefined)?.synopsis ?? "") ||
     String(((anime.jikan_snapshot as Record<string, unknown> | undefined)?.full as Record<string, unknown> | undefined)?.synopsis ?? "");
@@ -737,6 +962,10 @@ async function ensureTranslateTotal(runId: string, userId: string) {
 
 async function completeOrFailRun(runId: string) {
   const admin = createServiceSupabaseClient();
+  const { data: run } = await admin.from("sync_runs").select("status").eq("id", runId).maybeSingle();
+  if (String(run?.status ?? "") === "cancelled") {
+    return;
+  }
   const { data: jobs } = await admin.from("sync_jobs").select("status").eq("run_id", runId);
   const statuses = (jobs ?? []).map((j) => String(j.status));
   if (statuses.some((s) => s === "queued" || s === "running" || s === "retry")) {
@@ -749,7 +978,8 @@ async function completeOrFailRun(runId: string) {
       status: failed ? "failed" : "completed",
       finished_at: nowIso(),
     })
-    .eq("id", runId);
+    .eq("id", runId)
+    .in("status", ["queued", "running"]);
 }
 
 async function failOrRetryJob(job: JobRow, message: string): Promise<"failed" | "retry"> {
@@ -772,7 +1002,19 @@ async function failOrRetryJob(job: JobRow, message: string): Promise<"failed" | 
 
 async function processJob(job: JobRow) {
   const admin = createServiceSupabaseClient();
-  await admin
+  if (await isRunCancelled(job.run_id)) {
+    await admin
+      .from("sync_jobs")
+      .update({
+        status: "cancelled",
+        finished_at: nowIso(),
+        last_error: "Run annulé.",
+        updated_at: nowIso(),
+      })
+      .eq("id", job.id);
+    return;
+  }
+  const { data: runPatch } = await admin
     .from("sync_runs")
     .update({
       status: "running",
@@ -780,7 +1022,21 @@ async function processJob(job: JobRow) {
       started_at: nowIso(),
     })
     .eq("id", job.run_id)
-    .in("status", ["queued", "running"]);
+    .in("status", ["queued", "running"])
+    .select("id")
+    .maybeSingle();
+  if (!runPatch) {
+    await admin
+      .from("sync_jobs")
+      .update({
+        status: "cancelled",
+        finished_at: nowIso(),
+        last_error: "Run annulé ou terminé.",
+        updated_at: nowIso(),
+      })
+      .eq("id", job.id);
+    return;
+  }
 
   try {
     if (job.stage === "import") {
@@ -804,8 +1060,21 @@ async function processJob(job: JobRow) {
       );
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Erreur job";
-    const nextStatus = await failOrRetryJob(job, message);
+    const message = error instanceof Error ? error.message : "";
+    if (message === RUN_CANCELLED_MSG) {
+      await admin
+        .from("sync_jobs")
+        .update({
+          status: "cancelled",
+          finished_at: nowIso(),
+          last_error: "Annulé.",
+          updated_at: nowIso(),
+        })
+        .eq("id", job.id);
+      return;
+    }
+    const errText = error instanceof Error ? error.message : "Erreur job";
+    const nextStatus = await failOrRetryJob(job, errText);
     if ((job.stage === "enrich" || job.stage === "translate") && nextStatus === "failed") {
       await syncStageProgressFromJobs(
         job.run_id,

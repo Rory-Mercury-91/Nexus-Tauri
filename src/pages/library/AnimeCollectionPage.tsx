@@ -3,10 +3,10 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AddAnimeModal } from "@/features/library/AddAnimeModal/AddAnimeModal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
-import { ResyncQueueModal } from "@/components/modals/ResyncQueueModal/ResyncQueueModal";
+import { LibrarySyncDiffModal } from "@/components/modals/LibrarySyncDiffModal/LibrarySyncDiffModal";
 import { useSyncProgress } from "@/contexts/SyncProgressContext";
+import { notifyToast } from "@/lib/toastEvents";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import { useSession } from "@/hooks/useSession";
 import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import {
   fetchAnimeCollection,
@@ -21,11 +21,8 @@ import {
   readCachedCollection,
   writeCachedCollection,
 } from "@/services/library/collectionCacheService";
-import {
-  detectResyncChanges,
-  applyResyncChanges,
-  type ResyncQueueEntry,
-} from "@/services/library/resyncQueueService";
+import { fetchSyncImportPreview } from "@/services/library/syncImportPreviewService";
+import type { SyncDiffField } from "@/services/library/syncDiffService";
 import {
   getMainScrollContainer,
   readMainScrollTop,
@@ -198,8 +195,6 @@ function buildGroupedAnimeItems(items: AnimeItem[]): AnimeItem[] {
 export function AnimeCollectionPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { session } = useSession();
-  const userId = session?.user?.id ?? "";
   const [addOpen, setAddOpen] = useState(false);
   const [items, setItems] = useState<AnimeItem[]>([]);
   const [loadingCollection, setLoadingCollection] = useState(false);
@@ -208,6 +203,11 @@ export function AnimeCollectionPage() {
   const isSyncBusy = Boolean(
     activeRun && (activeRun.status === "queued" || activeRun.status === "running")
   );
+  const [collectionSyncModalOpen, setCollectionSyncModalOpen] = useState(false);
+  const [collectionSyncSource, setCollectionSyncSource] = useState<"mal" | "anilist">("mal");
+  const [collectionSyncFields, setCollectionSyncFields] = useState<SyncDiffField[]>([]);
+  const [collectionSyncSelectedIds, setCollectionSyncSelectedIds] = useState<string[]>([]);
+  const [collectionSyncPreviewLoading, setCollectionSyncPreviewLoading] = useState(false);
   const [tabType, setTabType] = useState<string>("Tous");
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -225,11 +225,6 @@ export function AnimeCollectionPage() {
   const [pageSize, setPageSize] = useState<PageSizeValue>(25);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   
-  const [resyncQueue, setResyncQueue] = useState<ResyncQueueEntry[]>([]);
-  const [resyncQueueIndex, setResyncQueueIndex] = useState(0);
-  const [resyncQueueOpen, setResyncQueueOpen] = useState(false);
-  const [resyncProcessing, setResyncProcessing] = useState(false);
-  const [detectingChanges, setDetectingChanges] = useState(false);
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
   const [integrationConnected, setIntegrationConnected] = useState({
@@ -282,96 +277,32 @@ export function AnimeCollectionPage() {
     }
   }, []);
   
-  async function detectChanges(source: "mal" | "anilist") {
-    if (!userId) return;
-    setDetectingChanges(true);
+  async function openCollectionSyncPreview(source: "mal" | "anilist") {
+    setCollectionSyncSource(source);
+    setCollectionSyncPreviewLoading(true);
     try {
       const supabase = getSupabaseClient();
-      const queue = await detectResyncChanges(supabase, userId, "anime", source);
-      if (queue.length === 0) {
-        setCollectionError("Aucune modification détectée. Toutes les entrées sont à jour.");
-      } else {
-        setResyncQueue(queue);
-        setResyncQueueIndex(0);
-        setResyncQueueOpen(true);
-      }
+      const { fields } = await fetchSyncImportPreview(supabase, { source, mediaType: "anime" });
+      setCollectionSyncFields(fields);
+      setCollectionSyncSelectedIds(fields.map((f) => f.id));
+      setCollectionSyncModalOpen(true);
     } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de la détection des changements.");
+      const message = e instanceof Error ? e.message : "Impossible de charger l'aperçu de synchronisation.";
+      setCollectionError(message);
+      notifyToast({ kind: "error", message });
     } finally {
-      setDetectingChanges(false);
+      setCollectionSyncPreviewLoading(false);
     }
   }
-  
-  async function applyCurrentEntry(entryId: string, selectedFieldIds: string[]) {
-    setResyncProcessing(true);
+
+  async function confirmCollectionSync(source: "mal" | "anilist") {
     try {
-      const currentEntry = resyncQueue[resyncQueueIndex];
-      if (!currentEntry) return;
-      
-      const supabase = getSupabaseClient();
-      
-      const malId = currentEntry.malId;
-      const jikanEndpoint = `https://api.jikan.moe/v4/anime/${malId}/full`;
-      const jikanResp = await fetch(jikanEndpoint);
-      const jikanJson = await jikanResp.json() as { data?: Record<string, unknown> };
-      const newJikanData = jikanJson.data ?? {};
-      
-      const newMalSnapshot = {};
-      const newJikanSnapshot = { full: newJikanData };
-      
-      await applyResyncChanges(supabase, entryId, "anime", selectedFieldIds, newMalSnapshot, newJikanSnapshot);
-      
-      if (resyncQueueIndex < resyncQueue.length - 1) {
-        setResyncQueueIndex((prev) => prev + 1);
-      } else {
-        setResyncQueueOpen(false);
-        await loadCollection();
-      }
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de l'application des changements.");
-    } finally {
-      setResyncProcessing(false);
-    }
-  }
-  
-  async function skipCurrentEntry() {
-    if (resyncQueueIndex < resyncQueue.length - 1) {
-      setResyncQueueIndex((prev) => prev + 1);
-    } else {
-      setResyncQueueOpen(false);
+      await startSync(source, { selectedFieldIds: collectionSyncSelectedIds });
+      setCollectionSyncModalOpen(false);
       await loadCollection();
-    }
-  }
-  
-  async function applyAllEntries() {
-    setResyncProcessing(true);
-    try {
-      const supabase = getSupabaseClient();
-      for (const entry of resyncQueue) {
-        const malId = entry.malId;
-        const jikanEndpoint = `https://api.jikan.moe/v4/anime/${malId}/full`;
-        const jikanResp = await fetch(jikanEndpoint);
-        const jikanJson = await jikanResp.json() as { data?: Record<string, unknown> };
-        const newJikanData = jikanJson.data ?? {};
-        
-        const newMalSnapshot = {};
-        const newJikanSnapshot = { full: newJikanData };
-        const allFieldIds = entry.fields.map((f) => f.id);
-        
-        await applyResyncChanges(supabase, entry.id, "anime", allFieldIds, newMalSnapshot, newJikanSnapshot);
-      }
-      setResyncQueueOpen(false);
-      await loadCollection();
+      setCollectionError(null);
     } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de l'application globale.");
-    } finally {
-      setResyncProcessing(false);
-    }
-  }
-  
-  function handleResyncQueueClose() {
-    if (!resyncProcessing) {
-      setResyncQueueOpen(false);
+      setCollectionError(e instanceof Error ? e.message : "Impossible de lancer la synchronisation.");
     }
   }
 
@@ -683,45 +614,32 @@ export function AnimeCollectionPage() {
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.mal}
-            onClick={() => void startSync("mal")}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.mal || collectionSyncPreviewLoading}
+            onClick={() => void openCollectionSyncPreview("mal")}
             title={
               !integrationConnected.mal
                 ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
                 : isSyncBusy
                   ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Lancer la synchronisation MAL"
+                  : "Aperçu puis synchronisation MAL"
             }
           >
-            Sync MAL
+            {collectionSyncPreviewLoading && collectionSyncSource === "mal" ? "Aperçu…" : "Sync MAL"}
           </button>
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist}
-            onClick={() => void startSync("anilist")}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist || collectionSyncPreviewLoading}
+            onClick={() => void openCollectionSyncPreview("anilist")}
             title={
               !integrationConnected.anilist
                 ? "Connecte d'abord AniList dans Paramètres > Intégrations."
                 : isSyncBusy
                   ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Lancer la synchronisation AniList"
+                  : "Aperçu puis synchronisation AniList"
             }
           >
-            Sync AniList
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
-            disabled={detectingChanges || !integrationConnected.mal}
-            onClick={() => void detectChanges("mal")}
-            title={
-              !integrationConnected.mal
-                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
-                : "Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
-            }
-          >
-            {detectingChanges ? "Détection..." : "Détecter changements (pré-sync)"}
+            {collectionSyncPreviewLoading && collectionSyncSource === "anilist" ? "Aperçu…" : "Sync AniList"}
           </button>
           <button type="button" className="library-add-anime-btn" onClick={() => setAddOpen(true)}>
             + Ajouter un animé
@@ -1117,20 +1035,26 @@ export function AnimeCollectionPage() {
       </button>
 
       <AddAnimeModal open={addOpen} onClose={() => setAddOpen(false)} />
-      
-      <ResyncQueueModal
-        open={resyncQueueOpen}
-        onClose={handleResyncQueueClose}
-        queue={resyncQueue}
-        currentIndex={resyncQueueIndex}
-        onNext={() => setResyncQueueIndex((prev) => Math.min(resyncQueue.length - 1, prev + 1))}
-        onPrevious={() => setResyncQueueIndex((prev) => Math.max(0, prev - 1))}
-        onApply={applyCurrentEntry}
-        onSkip={skipCurrentEntry}
-        onApplyAll={applyAllEntries}
-        processing={resyncProcessing}
+
+      <LibrarySyncDiffModal
+        open={collectionSyncModalOpen}
+        onClose={() => setCollectionSyncModalOpen(false)}
+        fields={collectionSyncFields}
+        selectedFieldIds={collectionSyncSelectedIds}
+        onToggleField={(fieldId, checked) => {
+          setCollectionSyncSelectedIds((prev) =>
+            checked ? (prev.includes(fieldId) ? prev : [...prev, fieldId]) : prev.filter((id) => id !== fieldId)
+          );
+        }}
+        onSelectAll={() => setCollectionSyncSelectedIds(collectionSyncFields.map((f) => f.id))}
+        onSelectNone={() => setCollectionSyncSelectedIds([])}
+        onSyncMal={() => void confirmCollectionSync("mal")}
+        onSyncAnilist={() => void confirmCollectionSync("anilist")}
+        syncing={syncLoading}
+        activeSource={collectionSyncSource}
+        lead="Aperçu agrégé (liste complète) : coche les types de mises à jour appliqués pendant la synchronisation (statut, titres). Une liste vide signifie déjà aligné sur le canon local pour ces critères."
       />
-      
+
       {isHelpOpen ? (
         <div className="anime-collection-help-backdrop" role="presentation" onMouseDown={() => setIsHelpOpen(false)}>
           <div className="anime-collection-help-modal" onMouseDown={(e) => e.stopPropagation()}>

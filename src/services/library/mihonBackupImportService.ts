@@ -1,6 +1,10 @@
 import pako from "pako";
 import protobuf from "protobufjs";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import {
+  mergeReadingProgressBySource,
+  resolveCanonicalReadStatus,
+} from "@/services/library/readingProgressResolution";
 import { getMihonSourceById } from "@/services/library/mihonSourceIndexService";
 
 const PG_INT_MAX = 2_147_483_647;
@@ -332,47 +336,64 @@ export async function importMihonBackupFile(
         throw new Error(existingError.message);
       }
 
-      const { data: upsertedRows, error: upsertError } = await supabase
-        .from("library_reading")
-        .upsert(
-          {
-            user_id: user.id,
-            mal_manga_id: malId,
-            title,
-            title_english: malTracking?.title ? String(malTracking.title) : title,
-            main_picture_url: imageUrl || null,
-            read_status: readStatus,
-            jikan_snapshot: snapshot,
-            mal_official_snapshot: malSnapshot,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,mal_manga_id" }
-        )
-        .select("id")
-        .limit(1);
+      const { data: upsertedRow, error: upsertError } = await supabase.rpc(
+        "upsert_library_reading_entry",
+        {
+          p_mal_manga_id: malId,
+          p_title: title,
+          p_title_english: malTracking?.title ? String(malTracking.title) : title,
+          p_main_picture_url: imageUrl || null,
+          p_jikan_snapshot: snapshot,
+          p_mal_official_snapshot: malSnapshot,
+          p_read_status: readStatus,
+          p_user_notes: "",
+        }
+      );
       if (upsertError) {
         throw new Error(upsertError.message);
       }
       const readingId = String(
-        upsertedRows?.[0]?.id ?? existingRow?.id ?? ""
+        (upsertedRow as { id?: string } | null)?.id ?? existingRow?.id ?? ""
       );
       if (readingId) {
-        const { error: presenceError } = await supabase
-          .from("reading_mihon_presence")
-          .upsert(
-            {
-              reading_id: readingId,
-              user_id: user.id,
-              chapters_read: chaptersRead,
-              chapters_total: Math.max(chaptersTotal, chaptersRead),
-              source_id: sourceId,
-              source_url: sourceUrl,
-              prefer_mihon_progress: true,
-            },
-            { onConflict: "reading_id,user_id" }
-          );
+        const { error: presenceError } = await supabase.rpc("upsert_reading_mihon_presence", {
+          p_reading_id: readingId,
+          p_chapters_read: chaptersRead,
+          p_chapters_total: Math.max(chaptersTotal, chaptersRead),
+          p_source_id: sourceId,
+          p_source_url: sourceUrl,
+          p_prefer_mihon_progress: true,
+        });
         if (presenceError) {
           throw new Error(presenceError.message);
+        }
+
+        const { data: progressRow } = await supabase
+          .from("library_reading")
+          .select("reading_progress_by_source")
+          .eq("id", readingId)
+          .maybeSingle();
+        const merged = mergeReadingProgressBySource(
+          (progressRow?.reading_progress_by_source ?? {}) as Record<string, unknown>,
+          "mihon",
+          {
+            read_status: readStatus,
+            chapters_read: chaptersRead,
+            chapters_total: Math.max(chaptersTotal, chaptersRead),
+            updated_at: new Date().toISOString(),
+          }
+        );
+        const canonical = resolveCanonicalReadStatus(merged) ?? readStatus;
+        const { error: progressMergeError } = await supabase
+          .from("library_reading")
+          .update({
+            reading_progress_by_source: merged,
+            read_status: canonical,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", readingId);
+        if (progressMergeError) {
+          throw new Error(progressMergeError.message);
         }
       }
 

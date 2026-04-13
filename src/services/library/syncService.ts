@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { appendClientLog } from "@/services/observability/clientLogService";
+import { invokeEdgeFunction } from "@/services/supabase/edgeFunctionInvoke";
 
 export type SyncSource = "mal" | "anilist";
 export type SyncMediaType = "anime" | "reading";
@@ -40,211 +40,6 @@ export type SyncStartOptions = {
   targetMalId?: number;
 };
 
-function stringifyPayloadSummary(payload: unknown): string {
-  if (!payload) {
-    return "";
-  }
-  if (typeof payload === "string") {
-    return payload;
-  }
-  if (typeof payload === "object") {
-    const data = payload as Record<string, unknown>;
-    const preferred = [
-      data.error,
-      data.message,
-      data.details,
-      data.hint,
-      data.code,
-    ].filter((value) => typeof value === "string" && value.trim().length > 0) as string[];
-    if (preferred.length > 0) {
-      return preferred.join(" | ");
-    }
-    try {
-      return JSON.stringify(payload);
-    } catch {
-      return String(payload);
-    }
-  }
-  return String(payload);
-}
-
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  const parts = token.split(".");
-  if (parts.length < 2) {
-    return null;
-  }
-  try {
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-    const json = atob(padded);
-    return JSON.parse(json) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-async function invokeFunction<T>(supabase: SupabaseClient, fn: string, body: unknown): Promise<T> {
-  async function runWithCurrentSession(): Promise<{ data: unknown; error: unknown }> {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) {
-      throw new Error("Session Supabase introuvable (getSession en erreur).");
-    }
-    let session = data.session ?? null;
-    if (!session || (session.expires_at && session.expires_at * 1000 <= Date.now() + 60_000)) {
-      const refreshed = await supabase.auth.refreshSession();
-      if (refreshed.error) {
-        throw new Error("Session Supabase expirée (refresh impossible).");
-      }
-      session = refreshed.data.session ?? null;
-    }
-    const accessToken = session?.access_token ?? "";
-    if (!accessToken) {
-      throw new Error("Session Supabase absente (token vide).");
-    }
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-    if (!anonKey) {
-      throw new Error("Configuration Supabase invalide (clé anon manquante).");
-    }
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-    if (!supabaseUrl) {
-      throw new Error("Configuration Supabase invalide (URL manquante).");
-    }
-    const projectRef = (() => {
-      try {
-        return new URL(supabaseUrl).hostname.split(".")[0] ?? "";
-      } catch {
-        return "";
-      }
-    })();
-    const jwtPayload = decodeJwtPayload(accessToken) ?? {};
-    const tokenRef = String(jwtPayload.ref ?? "");
-    if (projectRef && tokenRef && tokenRef !== projectRef) {
-      throw new Error(
-        `JWT invalide pour ce projet (token.ref=${tokenRef}, attendu=${projectRef}). Déconnecte-toi puis reconnecte-toi.`
-      );
-    }
-    // Vérifie explicitement que le token courant est accepté par Auth.
-    try {
-      const authResp = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/auth/v1/user`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          apikey: anonKey,
-        },
-      });
-      if (!authResp.ok) {
-        throw new Error(`Token rejeté par /auth/v1/user (HTTP ${authResp.status}).`);
-      }
-      appendClientLog("info", "supabase.auth.user", "Connexion Supabase OK", `HTTP ${authResp.status}`);
-    } catch (authError) {
-      const msg = authError instanceof Error ? authError.message : "Token rejeté par Auth.";
-      appendClientLog("error", "supabase.auth.user", "Connexion Supabase rejetée", msg);
-      throw new Error(`${msg} Déconnecte-toi puis reconnecte-toi.`);
-    }
-    const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${fn}`;
-    try {
-      const startedAt = performance.now();
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          apikey: anonKey,
-        },
-        body: JSON.stringify((body ?? {}) as Record<string, unknown>),
-      });
-      let payload: unknown = null;
-      const rawText = await response.text();
-      if (rawText.trim().length > 0) {
-        try {
-          payload = JSON.parse(rawText) as unknown;
-        } catch {
-          payload = rawText;
-        }
-      }
-      if (!response.ok) {
-        const summary = stringifyPayloadSummary(payload);
-        appendClientLog(
-          "error",
-          `supabase.functions.${fn}`,
-          `POST /functions/v1/${fn} échoué`,
-          `HTTP ${response.status}${summary ? ` — ${summary}` : ""}`
-        );
-        return {
-          data: null,
-          error: {
-            message: "non-2xx status code",
-            context: { status: response.status, payload },
-          },
-        };
-      }
-      appendClientLog(
-        "info",
-        `supabase.functions.${fn}`,
-        `POST /functions/v1/${fn} OK`,
-        `HTTP ${response.status} — ${Math.round(performance.now() - startedAt)} ms`
-      );
-      return { data: payload, error: null };
-    } catch (networkError) {
-      appendClientLog(
-        "error",
-        `supabase.functions.${fn}`,
-        `POST /functions/v1/${fn} erreur réseau`,
-        networkError instanceof Error ? networkError.message : String(networkError)
-      );
-      return { data: null, error: networkError };
-    }
-  }
-
-  function formatFunctionError(rawError: unknown): string {
-    const typed = rawError as { message?: string; context?: unknown };
-    let details = "";
-    if (typeof typed.context === "string" && typed.context.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(typed.context) as { error?: string };
-        details = parsed.error ?? typed.context;
-      } catch {
-        details = typed.context;
-      }
-    } else if (typed.context instanceof Response) {
-      details = `HTTP ${typed.context.status}`;
-    } else if (typed.context && typeof typed.context === "object") {
-      const withStatus = typed.context as { status?: unknown; payload?: unknown };
-      if (typeof withStatus.status === "number") {
-        details = `HTTP ${withStatus.status}`;
-      }
-      if (withStatus.payload) {
-        const payloadSummary = stringifyPayloadSummary(withStatus.payload);
-        details = details
-          ? `${details} — ${payloadSummary}`
-          : payloadSummary;
-      }
-    }
-    const baseMessage = typed.message || "Erreur Edge Function";
-    return details ? `[${fn}] ${baseMessage} — ${details}` : `[${fn}] ${baseMessage}`;
-  }
-
-  let { data, error } = await runWithCurrentSession();
-  if (error) {
-    const typed = error as { message?: string; context?: unknown };
-    const isUnauthorized =
-      (typeof typed.message === "string" && typed.message.includes("non-2xx status code")) ||
-      (typed.context instanceof Response && typed.context.status === 401);
-    if (isUnauthorized) {
-      await supabase.auth.refreshSession().catch(() => undefined);
-      ({ data, error } = await runWithCurrentSession());
-      if (error) {
-        // Dernier fallback en mode SDK natif sans en-têtes custom.
-        ({ data, error } = await supabase.functions.invoke(fn, { body: (body ?? {}) as Record<string, unknown> }));
-      }
-    }
-  }
-  if (error) {
-    throw new Error(formatFunctionError(error));
-  }
-  return data as T;
-}
-
 export async function startAnimeSync(
   supabase: SupabaseClient,
   source: SyncSource,
@@ -259,7 +54,7 @@ export async function startAnimeSync(
       : null;
   let data: { ok: boolean; run_id: string; reused?: boolean };
   try {
-    data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
+    data = await invokeEdgeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
       supabase,
       "sync-start",
       {
@@ -295,7 +90,7 @@ export async function startReadingSync(
       : null;
   let data: { ok: boolean; run_id: string; reused?: boolean };
   try {
-    data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
+    data = await invokeEdgeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
       supabase,
       "sync-start",
       {
@@ -318,7 +113,7 @@ export async function startReadingSync(
 }
 
 export async function getAnimeSyncStatus(supabase: SupabaseClient): Promise<SyncStatusPayload> {
-  const data = await invokeFunction<{ ok: boolean } & SyncStatusPayload>(supabase, "sync-status", {});
+  const data = await invokeEdgeFunction<{ ok: boolean } & SyncStatusPayload>(supabase, "sync-status", {});
   if (!data?.ok) {
     throw new Error("Impossible de récupérer l’état de synchronisation.");
   }
@@ -330,7 +125,7 @@ export async function getAnimeSyncStatus(supabase: SupabaseClient): Promise<Sync
 }
 
 export async function getReadingSyncStatus(supabase: SupabaseClient): Promise<SyncStatusPayload> {
-  const data = await invokeFunction<{ ok: boolean } & SyncStatusPayload>(supabase, "sync-status", {
+  const data = await invokeEdgeFunction<{ ok: boolean } & SyncStatusPayload>(supabase, "sync-status", {
     media_type: "reading",
   });
   if (!data?.ok) {
@@ -344,9 +139,34 @@ export async function getReadingSyncStatus(supabase: SupabaseClient): Promise<Sy
 }
 
 export async function tickAnimeSyncWorker(supabase: SupabaseClient): Promise<void> {
-  await invokeFunction(supabase, "sync-worker", {});
+  await invokeEdgeFunction(supabase, "sync-worker", {});
 }
 
 export async function tickReadingSyncWorker(supabase: SupabaseClient): Promise<void> {
-  await invokeFunction(supabase, "sync-worker", {});
+  await invokeEdgeFunction(supabase, "sync-worker", {});
+}
+
+/**
+ * Annule le run actif (queued/running) pour ce type de média : jobs en file passent en cancelled ;
+ * le job déjà « running » s’arrête au prochain contrôle côté worker.
+ */
+export async function cancelActiveSyncRun(
+  supabase: SupabaseClient,
+  mediaType: SyncMediaType
+): Promise<{ cancelled: boolean; run_id?: string; message?: string }> {
+  const data = await invokeEdgeFunction<{
+    ok: boolean;
+    cancelled?: boolean;
+    run_id?: string;
+    message?: string;
+    error?: string;
+  }>(supabase, "sync-cancel", { media_type: mediaType });
+  if (!data?.ok) {
+    throw new Error(data?.error ?? "Annulation impossible.");
+  }
+  return {
+    cancelled: Boolean(data.cancelled),
+    run_id: data.run_id,
+    message: data.message,
+  };
 }

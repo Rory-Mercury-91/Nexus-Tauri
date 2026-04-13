@@ -230,8 +230,8 @@ export async function loadLibraryProgressSnapshot(
     for (let i = 0; i < readingIds.length; i += BATCH_SIZE) {
       const batch = readingIds.slice(i, i + BATCH_SIZE);
       const volumesRes = await supabase
-        .from("reading_volumes")
-        .select("reading_id, is_read, release_date_vf")
+        .from("user_manga_volume_state")
+        .select("reading_id, is_read")
         .in("reading_id", batch);
       throwIfError(volumesRes.error);
       volumeRows.push(...((volumesRes.data ?? []) as Array<Record<string, unknown>>));
@@ -361,6 +361,7 @@ export async function loadDashboardData(
   profiles: Map<string, FamilyMemberProfile>;
   memberIds: string[];
   readingVolumes: Array<{ ownerId: string; volumeCount: number; totalCost: number }>;
+  readingUniqueCount: number;
 }> {
   const [recurring, oneOff, families] = await Promise.all([
     listRecurringSubscriptions(supabase),
@@ -394,9 +395,16 @@ export async function loadDashboardData(
   }
 
   // Calculer les coûts des volumes de lecture par propriétaire
-  const readingVolumes = await calculateReadingVolumesCosts(supabase, ids);
+  const readingVolumesResult = await calculateReadingVolumesCosts(supabase, ids);
 
-  return { recurring, oneOff, profiles, memberIds: ids, readingVolumes };
+  return {
+    recurring,
+    oneOff,
+    profiles,
+    memberIds: ids,
+    readingVolumes: readingVolumesResult.byOwner,
+    readingUniqueCount: readingVolumesResult.uniqueVolumeCount,
+  };
 }
 
 /**
@@ -405,25 +413,36 @@ export async function loadDashboardData(
 async function calculateReadingVolumesCosts(
   supabase: SupabaseClient,
   userIds: string[]
-): Promise<Array<{ ownerId: string; volumeCount: number; totalCost: number }>> {
-  if (userIds.length === 0) return [];
+): Promise<{
+  byOwner: Array<{ ownerId: string; volumeCount: number; totalCost: number }>;
+  uniqueVolumeCount: number;
+}> {
+  if (userIds.length === 0) {
+    return { byOwner: [], uniqueVolumeCount: 0 };
+  }
 
   // Récupérer tous les volumes avec leurs propriétaires et coûts
   const { data: volumeOwnersData } = await supabase
-    .from("reading_volume_owners")
-    .select("user_id, share_euros, reading_volumes!inner(price_euros)")
+    .from("family_manga_volume_owner")
+    .select("user_id, catalog_volume_id, share_euros")
     .in("user_id", userIds);
 
   const costsByOwner = new Map<string, { volumeCount: number; totalCost: number }>();
+  const uniqueVolumeIds = new Set<string>();
 
-  type ReadingVolumeOwnerRow = {
+  type FamilyVolumeOwnerRow = {
     user_id: string;
+    catalog_volume_id?: string | null;
     share_euros: number | string | null;
   };
   (volumeOwnersData ?? []).forEach((owner) => {
-    const typedOwner = owner as ReadingVolumeOwnerRow;
+    const typedOwner = owner as FamilyVolumeOwnerRow;
     const userId = typedOwner.user_id;
+    const volumeId = String(typedOwner.catalog_volume_id ?? "");
     const shareEuros = Number(typedOwner.share_euros ?? 0);
+    if (volumeId) {
+      uniqueVolumeIds.add(volumeId);
+    }
     
     if (!costsByOwner.has(userId)) {
       costsByOwner.set(userId, { volumeCount: 0, totalCost: 0 });
@@ -434,11 +453,14 @@ async function calculateReadingVolumesCosts(
     current.totalCost += shareEuros;
   });
 
-  return Array.from(costsByOwner.entries()).map(([ownerId, data]) => ({
-    ownerId,
-    volumeCount: data.volumeCount,
-    totalCost: data.totalCost,
-  }));
+  return {
+    byOwner: Array.from(costsByOwner.entries()).map(([ownerId, data]) => ({
+      ownerId,
+      volumeCount: data.volumeCount,
+      totalCost: data.totalCost,
+    })),
+    uniqueVolumeCount: uniqueVolumeIds.size,
+  };
 }
 
 function ownerSubscriptionMonthlyShare(

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
+import {
+  FAMILY_PANEL_CACHE_TTL_MS,
+  readFamilySettingsCache,
+  writeFamilySettingsCache,
+} from "@/lib/settingsPanelsCache";
 import { useDataFetchOverlay } from "@/contexts/DataFetchOverlayContext";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import {
@@ -49,6 +54,14 @@ export function FamilySettingsPanel() {
       if (!displayFamilyId) {
         setMembers([]);
         setFamilyName("");
+        if (myId) {
+          writeFamilySettingsCache(myId, {
+            adminFamilyId: firstAdminFamilyId,
+            visibleFamilyId: null,
+            familyName: "",
+            members: [],
+          });
+        }
         return;
       }
 
@@ -56,6 +69,14 @@ export function FamilySettingsPanel() {
       const selectedFamily = famRows.find((f) => f.id === displayFamilyId);
       setFamilyName(selectedFamily?.name ?? "");
       setMembers(memberRows);
+      if (myId) {
+        writeFamilySettingsCache(myId, {
+          adminFamilyId: firstAdminFamilyId,
+          visibleFamilyId: displayFamilyId,
+          familyName: selectedFamily?.name ?? "",
+          members: memberRows,
+        });
+      }
     } catch {
       setAdminFamilyId(null);
       setMembers([]);
@@ -63,11 +84,20 @@ export function FamilySettingsPanel() {
     } finally {
       endPageDataLoad();
     }
-  }, [beginPageDataLoad, endPageDataLoad]);
+  }, [beginPageDataLoad, endPageDataLoad, myId]);
 
   useEffect(() => {
+    if (!myId) return;
+    const cached = readFamilySettingsCache(myId);
+    if (cached && Date.now() - cached.cachedAt < FAMILY_PANEL_CACHE_TTL_MS) {
+      setAdminFamilyId(cached.payload.adminFamilyId);
+      setVisibleFamilyId(cached.payload.visibleFamilyId);
+      setFamilyName(cached.payload.familyName);
+      setMembers(cached.payload.members);
+      return;
+    }
     void reload();
-  }, [reload]);
+  }, [myId, reload]);
 
   async function handleSearchPseudo() {
     setError(null);

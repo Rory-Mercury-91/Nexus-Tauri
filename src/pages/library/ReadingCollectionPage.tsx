@@ -4,10 +4,9 @@ import { AddReadingModal } from "@/features/library/AddReadingModal/AddReadingMo
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
-import { ResyncQueueModal } from "@/components/modals/ResyncQueueModal/ResyncQueueModal";
+import { LibrarySyncDiffModal } from "@/components/modals/LibrarySyncDiffModal/LibrarySyncDiffModal";
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import { useSession } from "@/hooks/useSession";
 import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import {
   deleteReadingEntry,
@@ -23,11 +22,8 @@ import {
   readCachedCollection,
   writeCachedCollection,
 } from "@/services/library/collectionCacheService";
-import {
-  detectResyncChanges,
-  applyResyncChanges,
-  type ResyncQueueEntry,
-} from "@/services/library/resyncQueueService";
+import { fetchSyncImportPreview } from "@/services/library/syncImportPreviewService";
+import type { SyncDiffField } from "@/services/library/syncDiffService";
 import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
 import { notifyToast } from "@/lib/toastEvents";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
@@ -120,8 +116,6 @@ function workStatusClass(status: WorkStatus): string {
 export function ReadingCollectionPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { session } = useSession();
-  const userId = session?.user?.id ?? "";
   const [addOpen, setAddOpen] = useState(false);
   const [items, setItems] = useState<ReadingCollectionEntry[]>([]);
   const [loadingCollection, setLoadingCollection] = useState(false);
@@ -148,21 +142,22 @@ export function ReadingCollectionPage() {
     activeRun && (activeRun.status === "queued" || activeRun.status === "running")
   );
   
-  const [resyncQueue, setResyncQueue] = useState<ResyncQueueEntry[]>([]);
-  const [resyncQueueIndex, setResyncQueueIndex] = useState(0);
-  const [resyncQueueOpen, setResyncQueueOpen] = useState(false);
-  const [resyncProcessing, setResyncProcessing] = useState(false);
-  const [detectingChanges, setDetectingChanges] = useState(false);
   const [nautiljonRefreshing, setNautiljonRefreshing] = useState(false);
   const [showNautiljonPendingOnly, setShowNautiljonPendingOnly] = useState(false);
   const [showMihonOnly, setShowMihonOnly] = useState(false);
+  const [mihonSourceFilter, setMihonSourceFilter] = useState<string>("Tous");
   const [showDuplicateMalGroups, setShowDuplicateMalGroups] = useState(false);
   const [progressSourceMode, setProgressSourceMode] = useState<ProgressSourceMode>("auto");
   const [integrationConnected, setIntegrationConnected] = useState({
     mal: false,
     anilist: false,
   });
-  
+  const [collectionSyncModalOpen, setCollectionSyncModalOpen] = useState(false);
+  const [collectionSyncSource, setCollectionSyncSource] = useState<"mal" | "anilist">("mal");
+  const [collectionSyncFields, setCollectionSyncFields] = useState<SyncDiffField[]>([]);
+  const [collectionSyncSelectedIds, setCollectionSyncSelectedIds] = useState<string[]>([]);
+  const [collectionSyncPreviewLoading, setCollectionSyncPreviewLoading] = useState(false);
+
   const filterRef = useRef<HTMLDivElement>(null);
 
   const types = useMemo(() => {
@@ -182,6 +177,18 @@ export function ReadingCollectionPage() {
   );
   const availableThemes = useMemo(
     () => ["Tous", ...Array.from(new Set(items.flatMap((x) => x.themes))).sort((a, b) => a.localeCompare(b))],
+    [items]
+  );
+  const availableMihonSources = useMemo(
+    () =>
+      [
+        "Tous",
+        ...Array.from(
+          new Set(
+            items.flatMap((item) => item.mihonSources ?? []).filter((label) => label.trim().length > 0)
+          )
+        ).sort((a, b) => a.localeCompare(b)),
+      ],
     [items]
   );
 
@@ -424,6 +431,12 @@ export function ReadingCollectionPage() {
       if (showMihonOnly && !item.hasMihonInFamily) {
         return false;
       }
+      if (
+        mihonSourceFilter !== "Tous" &&
+        !(item.mihonSources ?? []).includes(mihonSourceFilter)
+      ) {
+        return false;
+      }
       if (genreFilter !== "Tous" && !item.genres.includes(genreFilter)) {
         return false;
       }
@@ -455,7 +468,13 @@ export function ReadingCollectionPage() {
       }
     });
     return base;
-  }, [favoriteOnly, genreFilter, items, query, showFamilyCollection, showMihonOnly, showNautiljonPendingOnly, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
+  }, [favoriteOnly, genreFilter, items, mihonSourceFilter, query, showFamilyCollection, showMihonOnly, showNautiljonPendingOnly, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
+
+  useEffect(() => {
+    if (!availableMihonSources.includes(mihonSourceFilter)) {
+      setMihonSourceFilter("Tous");
+    }
+  }, [availableMihonSources, mihonSourceFilter]);
 
   const duplicateMalIds = useMemo(() => {
     const counts = new Map<number, number>();
@@ -557,6 +576,7 @@ export function ReadingCollectionPage() {
     setShowFamilyCollection(false);
     setShowNautiljonPendingOnly(false);
     setShowMihonOnly(false);
+    setMihonSourceFilter("Tous");
     setShowDuplicateMalGroups(false);
     setProgressSourceMode("auto");
     setPage(1);
@@ -580,112 +600,35 @@ export function ReadingCollectionPage() {
     }
   }
 
-  async function onStartSync(source: "mal" | "anilist") {
+  async function openCollectionSyncPreview(source: "mal" | "anilist") {
+    setCollectionSyncSource(source);
+    setCollectionSyncPreviewLoading(true);
     try {
-      await startSync(source);
+      const supabase = getSupabaseClient();
+      const { fields } = await fetchSyncImportPreview(supabase, { source, mediaType: "reading" });
+      setCollectionSyncFields(fields);
+      setCollectionSyncSelectedIds(fields.map((f) => f.id));
+      setCollectionSyncModalOpen(true);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Impossible de charger l'aperçu de synchronisation.";
+      setCollectionError(message);
+      notifyToast({ kind: "error", message });
+    } finally {
+      setCollectionSyncPreviewLoading(false);
+    }
+  }
+
+  async function confirmCollectionSync(source: "mal" | "anilist") {
+    try {
+      await startSync(source, { selectedFieldIds: collectionSyncSelectedIds });
+      setCollectionSyncModalOpen(false);
       await loadCollection();
       setCollectionError(null);
     } catch (e) {
       setCollectionError(e instanceof Error ? e.message : "Impossible de lancer la synchronisation.");
     }
   }
-  
-  async function detectChanges(source: "mal" | "anilist") {
-    if (!userId) return;
-    setDetectingChanges(true);
-    try {
-      const supabase = getSupabaseClient();
-      const queue = await detectResyncChanges(supabase, userId, "reading", source);
-      if (queue.length === 0) {
-        setCollectionError("Aucune modification détectée. Toutes les entrées sont à jour.");
-      } else {
-        setResyncQueue(queue);
-        setResyncQueueIndex(0);
-        setResyncQueueOpen(true);
-      }
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de la détection des changements.");
-    } finally {
-      setDetectingChanges(false);
-    }
-  }
-  
-  async function applyCurrentEntry(entryId: string, selectedFieldIds: string[]) {
-    setResyncProcessing(true);
-    try {
-      const currentEntry = resyncQueue[resyncQueueIndex];
-      if (!currentEntry) return;
-      
-      const supabase = getSupabaseClient();
-      
-      // Récupérer les nouveaux snapshots (déjà chargés lors de la détection)
-      // Pour simplifier, on va juste recharger les données live
-      const malId = currentEntry.malId;
-      const jikanEndpoint = `https://api.jikan.moe/v4/manga/${malId}/full`;
-      const jikanResp = await fetch(jikanEndpoint);
-      const jikanJson = await jikanResp.json() as { data?: Record<string, unknown> };
-      const newJikanData = jikanJson.data ?? {};
-      
-      const newMalSnapshot = {}; // Pour l'instant, pas de données MAL
-      const newJikanSnapshot = { full: newJikanData };
-      
-      await applyResyncChanges(supabase, entryId, "reading", selectedFieldIds, newMalSnapshot, newJikanSnapshot);
-      
-      // Passer à l'entrée suivante ou fermer
-      if (resyncQueueIndex < resyncQueue.length - 1) {
-        setResyncQueueIndex((prev) => prev + 1);
-      } else {
-        setResyncQueueOpen(false);
-        await loadCollection();
-      }
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de l'application des changements.");
-    } finally {
-      setResyncProcessing(false);
-    }
-  }
-  
-  async function skipCurrentEntry() {
-    if (resyncQueueIndex < resyncQueue.length - 1) {
-      setResyncQueueIndex((prev) => prev + 1);
-    } else {
-      setResyncQueueOpen(false);
-      await loadCollection();
-    }
-  }
-  
-  async function applyAllEntries() {
-    setResyncProcessing(true);
-    try {
-      const supabase = getSupabaseClient();
-      for (const entry of resyncQueue) {
-        const malId = entry.malId;
-        const jikanEndpoint = `https://api.jikan.moe/v4/manga/${malId}/full`;
-        const jikanResp = await fetch(jikanEndpoint);
-        const jikanJson = await jikanResp.json() as { data?: Record<string, unknown> };
-        const newJikanData = jikanJson.data ?? {};
-        
-        const newMalSnapshot = {};
-        const newJikanSnapshot = { full: newJikanData };
-        const allFieldIds = entry.fields.map((f) => f.id);
-        
-        await applyResyncChanges(supabase, entry.id, "reading", allFieldIds, newMalSnapshot, newJikanSnapshot);
-      }
-      setResyncQueueOpen(false);
-      await loadCollection();
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Erreur lors de l'application globale.");
-    } finally {
-      setResyncProcessing(false);
-    }
-  }
-  
-  function handleResyncQueueClose() {
-    if (!resyncProcessing) {
-      setResyncQueueOpen(false);
-    }
-  }
-  
+
   function scrollToFilters() {
     if (!filterRef.current) {
       return;
@@ -713,45 +656,32 @@ export function ReadingCollectionPage() {
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.mal}
-            onClick={() => void onStartSync("mal")}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.mal || collectionSyncPreviewLoading}
+            onClick={() => void openCollectionSyncPreview("mal")}
             title={
               !integrationConnected.mal
                 ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
                 : isSyncBusy
                   ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Lancer la synchronisation MAL"
+                  : "Aperçu puis synchronisation MAL"
             }
           >
-            Sync MAL
+            {collectionSyncPreviewLoading && collectionSyncSource === "mal" ? "Aperçu…" : "Sync MAL"}
           </button>
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist}
-            onClick={() => void onStartSync("anilist")}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist || collectionSyncPreviewLoading}
+            onClick={() => void openCollectionSyncPreview("anilist")}
             title={
               !integrationConnected.anilist
                 ? "Connecte d'abord AniList dans Paramètres > Intégrations."
                 : isSyncBusy
                   ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Lancer la synchronisation AniList"
+                  : "Aperçu puis synchronisation AniList"
             }
           >
-            Sync AniList
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
-            disabled={detectingChanges || !integrationConnected.mal}
-            onClick={() => void detectChanges("mal")}
-            title={
-              !integrationConnected.mal
-                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
-                : "Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
-            }
-          >
-            {detectingChanges ? "Détection..." : "Détecter changements (pré-sync)"}
+            {collectionSyncPreviewLoading && collectionSyncSource === "anilist" ? "Aperçu…" : "Sync AniList"}
           </button>
           <button
             type="button"
@@ -892,6 +822,17 @@ export function ReadingCollectionPage() {
               <option value="auto">Auto (par entrée)</option>
               <option value="mal">MAL</option>
               <option value="mihon">MIHON</option>
+            </select>
+          </label>
+          <label className="anime-collection-filter-field">
+            <span>Source Mihon</span>
+            <select
+              value={mihonSourceFilter}
+              onChange={(e) => setMihonSourceFilter(e.target.value)}
+            >
+              {availableMihonSources.map((source) => (
+                <option key={source}>{source}</option>
+              ))}
             </select>
           </label>
 
@@ -1280,18 +1221,24 @@ export function ReadingCollectionPage() {
       </button>
 
       <AddReadingModal open={addOpen} onClose={() => setAddOpen(false)} />
-      
-      <ResyncQueueModal
-        open={resyncQueueOpen}
-        onClose={handleResyncQueueClose}
-        queue={resyncQueue}
-        currentIndex={resyncQueueIndex}
-        onNext={() => setResyncQueueIndex((prev) => Math.min(resyncQueue.length - 1, prev + 1))}
-        onPrevious={() => setResyncQueueIndex((prev) => Math.max(0, prev - 1))}
-        onApply={applyCurrentEntry}
-        onSkip={skipCurrentEntry}
-        onApplyAll={applyAllEntries}
-        processing={resyncProcessing}
+
+      <LibrarySyncDiffModal
+        open={collectionSyncModalOpen}
+        onClose={() => setCollectionSyncModalOpen(false)}
+        fields={collectionSyncFields}
+        selectedFieldIds={collectionSyncSelectedIds}
+        onToggleField={(fieldId, checked) => {
+          setCollectionSyncSelectedIds((prev) =>
+            checked ? (prev.includes(fieldId) ? prev : [...prev, fieldId]) : prev.filter((id) => id !== fieldId)
+          );
+        }}
+        onSelectAll={() => setCollectionSyncSelectedIds(collectionSyncFields.map((f) => f.id))}
+        onSelectNone={() => setCollectionSyncSelectedIds([])}
+        onSyncMal={() => void confirmCollectionSync("mal")}
+        onSyncAnilist={() => void confirmCollectionSync("anilist")}
+        syncing={syncLoading}
+        activeSource={collectionSyncSource}
+        lead="Aperçu agrégé (liste complète) : coche les types de mises à jour appliqués pendant la synchronisation (statut, titres). Une liste vide signifie déjà aligné sur le canon local pour ces critères."
       />
     </div>
   );
