@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { getAuthRedirectUrl } from "@/services/auth/authRedirectService";
 import { mapSupabaseAuthError } from "@/services/auth/mapSupabaseAuthError";
 
 /**
@@ -64,6 +65,36 @@ export async function updateUserDisplayName(
         profErr.message ||
         "Impossible de mettre à jour le profil (table profiles / RLS).",
     };
+  }
+  return { ok: true };
+}
+
+/**
+ * Lance la procédure de changement d'email avec confirmation.
+ */
+export async function changeUserEmail(
+  currentEmail: string,
+  nextEmail: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const newEmail = nextEmail.trim().toLowerCase();
+  const oldEmail = currentEmail.trim().toLowerCase();
+  if (!newEmail) {
+    return { ok: false, error: "Veuillez saisir une nouvelle adresse e-mail." };
+  }
+  if (newEmail === oldEmail) {
+    return {
+      ok: false,
+      error: "La nouvelle adresse e-mail doit être différente de l’actuelle.",
+    };
+  }
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.auth.updateUser(
+    { email: newEmail },
+    { emailRedirectTo: getAuthRedirectUrl() }
+  );
+  if (error) {
+    return { ok: false, error: mapSupabaseAuthError(error.message) };
   }
   return { ok: true };
 }

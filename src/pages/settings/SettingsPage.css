@@ -94,6 +94,7 @@
 }
 
 .settings-field input[type="text"],
+.settings-field input[type="email"],
 .settings-field input[type="password"] {
   width: 100%;
   max-width: 100%;

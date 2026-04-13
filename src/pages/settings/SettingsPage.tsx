@@ -4,6 +4,7 @@ import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
 import { notifyProfileChanged } from "@/lib/profileEvents";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import {
+  changeUserEmail,
   changePasswordWithVerification,
   updateUserDisplayName,
 } from "@/services/auth/accountActions";
@@ -39,6 +40,7 @@ export function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [nextEmail, setNextEmail] = useState("");
 
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -152,6 +154,29 @@ export function SettingsPage() {
       setNewPassword("");
       setConfirmPassword("");
       setMessage("Mot de passe mis à jour.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEmailSubmit(e: FormEvent) {
+    e.preventDefault();
+    clearFeedback();
+    if (!email) {
+      setError("Email de session introuvable.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await changeUserEmail(email, nextEmail);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setNextEmail("");
+      setMessage(
+        "Demande envoyée. Confirme la nouvelle adresse via l’email reçu."
+      );
     } finally {
       setBusy(false);
     }
@@ -317,6 +342,45 @@ export function SettingsPage() {
         </div>
       ) : (
         <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-block" aria-labelledby="settings-email">
+            <h2 id="settings-email" className="settings-block-title">
+              Adresse email
+            </h2>
+            <p className="settings-block-lead">
+              Un email de confirmation sera envoyé à la nouvelle adresse pour
+              valider le changement.
+            </p>
+            <form className="settings-form" onSubmit={handleEmailSubmit}>
+              <div className="settings-field">
+                <label htmlFor="settings-current-email">Adresse actuelle</label>
+                <input
+                  id="settings-current-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  disabled
+                />
+              </div>
+              <div className="settings-field">
+                <label htmlFor="settings-next-email">Nouvelle adresse</label>
+                <input
+                  id="settings-next-email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={nextEmail}
+                  onChange={(ev) => setNextEmail(ev.target.value)}
+                  disabled={busy}
+                />
+              </div>
+              <div className="settings-actions">
+                <button type="submit" disabled={busy}>
+                  {busy ? "Envoi…" : "Changer l’adresse email"}
+                </button>
+              </div>
+            </form>
+          </section>
+
           <section className="settings-block" aria-labelledby="settings-password">
             <h2 id="settings-password" className="settings-block-title">
               Mot de passe
