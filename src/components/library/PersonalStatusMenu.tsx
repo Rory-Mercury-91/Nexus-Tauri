@@ -10,6 +10,9 @@ type PersonalStatusMenuProps = {
   favorite: boolean;
   onSelect: (status: StatusOption) => void;
   onToggleFavorite: () => void;
+  mihonEnabled?: boolean;
+  onToggleMihon?: () => void;
+  onDelete?: () => void;
   onClose: () => void;
 };
 
@@ -22,6 +25,9 @@ export function PersonalStatusMenu({
   favorite,
   onSelect,
   onToggleFavorite,
+  mihonEnabled = false,
+  onToggleMihon,
+  onDelete,
   onClose,
 }: PersonalStatusMenuProps) {
   useEffect(() => {
@@ -75,6 +81,30 @@ export function PersonalStatusMenu({
             {status}
           </button>
         ))}
+        {onToggleMihon ? (
+          <button
+            type="button"
+            className={`anime-collection-menu-item${mihonEnabled ? " is-selected" : ""}`}
+            onClick={() => {
+              onToggleMihon();
+              onClose();
+            }}
+          >
+            {mihonEnabled ? "Retirer de Mihon" : "Ajouter à Mihon"}
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button
+            type="button"
+            className="anime-collection-menu-item"
+            onClick={() => {
+              onDelete();
+              onClose();
+            }}
+          >
+            Supprimer l'entrée
+          </button>
+        ) : null}
       </div>
     </div>,
     document.body

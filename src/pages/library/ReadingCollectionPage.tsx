@@ -1,23 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AddReadingModal } from "@/features/library/AddReadingModal/AddReadingModal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
+import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
 import { ResyncQueueModal } from "@/components/modals/ResyncQueueModal/ResyncQueueModal";
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { useSession } from "@/hooks/useSession";
 import {
+  deleteReadingEntry,
   fetchReadingCollection,
+  fetchReadingCollectionStamp,
+  setReadingMihonState,
   updateReadingStatus,
   updateReadingFavorite,
   type ReadingCollectionEntry,
 } from "@/services/library/readingCollectionService";
 import {
+  isSameCollectionStamp,
+  readCachedCollection,
+  writeCachedCollection,
+} from "@/services/library/collectionCacheService";
+import {
   detectResyncChanges,
   applyResyncChanges,
   type ResyncQueueEntry,
 } from "@/services/library/resyncQueueService";
+import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
+import { notifyToast } from "@/lib/toastEvents";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
 import {
   getMainScrollContainer,
@@ -28,22 +39,42 @@ import "./LibraryPages.css";
 import "./AnimeCollectionPage.css";
 
 type ViewMode = "grid" | "list";
+type CollectionRestoreState = {
+  fromDetailCollection?: "lectures";
+  restoreScrollY?: number;
+  collectionViewMode?: ViewMode;
+};
 type UserStatus = "Planifié" | "En cours" | "En pause" | "Terminé" | "Abandonné";
 type WorkStatus = "En cours" | "Terminé" | "Abandonné" | "À venir";
 type SortMode = "az" | "za" | "recent" | "oldest" | "score-asc" | "score-desc";
 type PageSizeValue = 25 | 50 | 100 | 250 | 500 | "all";
+type ProgressSourceMode = "auto" | "mal" | "mihon";
 
 const SCROLL_KEY_GRID = "reading-collection:scroll-main:grid";
 const SCROLL_KEY_LIST = "reading-collection:scroll-main:list";
+const RETURN_TO_COLLECTION_KEY = "app:scroll:return-to-collection";
 const VIEW_MODE_KEY = "reading-collection:view-mode";
 const NO_IMAGE_DATA_URI =
   "data:image/svg+xml;utf8," +
   encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="340" viewBox="0 0 240 340"><rect width="100%" height="100%" fill="#1f2430"/><circle cx="120" cy="135" r="44" fill="#2f3647"/><path d="M68 250h104" stroke="#6f7a93" stroke-width="10" stroke-linecap="round"/><text x="120" y="290" fill="#9aa3b8" font-size="18" text-anchor="middle" font-family="Arial">No Image</text></svg>'
   );
+const READING_COLLECTION_CACHE_KEY = "library:reading:collection:cache:v1";
 
 function getScrollKey(mode: ViewMode): string {
   return mode === "list" ? SCROLL_KEY_LIST : SCROLL_KEY_GRID;
+}
+
+function markReturnToReadingCollection(): void {
+  sessionStorage.setItem(RETURN_TO_COLLECTION_KEY, "lectures");
+}
+
+function buildReadingDetailState(scrollY: number, mode: ViewMode) {
+  return {
+    fromCollection: "lectures" as const,
+    collectionScrollY: scrollY,
+    collectionViewMode: mode,
+  };
 }
 
 function percent(value: number, total: number): number {
@@ -87,6 +118,7 @@ function workStatusClass(status: WorkStatus): string {
 
 export function ReadingCollectionPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { session } = useSession();
   const userId = session?.user?.id ?? "";
   const [addOpen, setAddOpen] = useState(false);
@@ -120,6 +152,11 @@ export function ReadingCollectionPage() {
   const [resyncQueueOpen, setResyncQueueOpen] = useState(false);
   const [resyncProcessing, setResyncProcessing] = useState(false);
   const [detectingChanges, setDetectingChanges] = useState(false);
+  const [nautiljonRefreshing, setNautiljonRefreshing] = useState(false);
+  const [showNautiljonPendingOnly, setShowNautiljonPendingOnly] = useState(false);
+  const [showMihonOnly, setShowMihonOnly] = useState(false);
+  const [showDuplicateMalGroups, setShowDuplicateMalGroups] = useState(false);
+  const [progressSourceMode, setProgressSourceMode] = useState<ProgressSourceMode>("auto");
   
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -143,12 +180,20 @@ export function ReadingCollectionPage() {
     [items]
   );
 
-  const loadCollection = useCallback(async () => {
+  const loadCollection = useCallback(async (forceRefresh = false) => {
     setLoadingCollection(true);
     try {
       const supabase = getSupabaseClient();
+      const remoteStamp = await fetchReadingCollectionStamp(supabase);
+      const cached = readCachedCollection<ReadingCollectionEntry>(READING_COLLECTION_CACHE_KEY);
+      if (!forceRefresh && cached && isSameCollectionStamp(cached.stamp, remoteStamp)) {
+        setItems(cached.items);
+        setCollectionError(null);
+        return;
+      }
       const rows = await fetchReadingCollection(supabase);
       setItems(rows);
+      writeCachedCollection(READING_COLLECTION_CACHE_KEY, rows, remoteStamp);
       setCollectionError(null);
     } catch (e) {
       setCollectionError(e instanceof Error ? e.message : "Impossible de charger la collection.");
@@ -158,23 +203,12 @@ export function ReadingCollectionPage() {
   }, []);
 
   useEffect(() => {
-    void loadCollection();
-  }, [loadCollection]);
-
-  useEffect(() => {
-    const container = getMainScrollContainer();
-    const scrollKey = getScrollKey(viewMode);
-    const handler = () => {
-      const y = readMainScrollTop(container);
-      sessionStorage.setItem(scrollKey, String(y));
-    };
-    if (container) {
-      container.addEventListener("scroll", handler, { passive: true });
-      return () => container.removeEventListener("scroll", handler);
+    const cached = readCachedCollection<ReadingCollectionEntry>(READING_COLLECTION_CACHE_KEY);
+    if (cached) {
+      setItems(cached.items);
     }
-    window.addEventListener("scroll", handler, { passive: true });
-    return () => window.removeEventListener("scroll", handler);
-  }, [viewMode]);
+    void loadCollection(false);
+  }, [loadCollection]);
 
   async function updateUserStatus(itemId: number, status: StatusOption) {
     const target = items.find((entry) => entry.malId === itemId);
@@ -207,6 +241,93 @@ export function ReadingCollectionPage() {
     }
   }
 
+  async function removeEntry(itemId: number) {
+    const target = items.find((entry) => entry.malId === itemId);
+    if (!target) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Supprimer définitivement "${target.title}" de la collection ?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const supabase = getSupabaseClient();
+      await deleteReadingEntry(supabase, target.id);
+      setItems((prev) => prev.filter((entry) => entry.id !== target.id));
+    } catch (error) {
+      setCollectionError(
+        error instanceof Error ? error.message : "Suppression impossible."
+      );
+    }
+  }
+
+  async function toggleMihonEntry(itemId: number) {
+    const target = items.find((entry) => entry.malId === itemId);
+    if (!target) {
+      return;
+    }
+    const nextEnabled = !target.mihonEnabledByCurrentUser;
+    const previous = target;
+    const nextRead = nextEnabled ? Math.max(target.mihonChaptersRead, target.malChaptersRead) : 0;
+    const nextTotal = nextEnabled
+      ? Math.max(target.mihonChaptersTotal, target.malChaptersTotal, nextRead)
+      : 0;
+    setItems((prev) =>
+      prev.map((item) =>
+        item.malId === itemId
+          ? {
+              ...item,
+              mihonEnabledByCurrentUser: nextEnabled,
+              preferMihonProgress: nextEnabled,
+              mihonChaptersRead: nextRead,
+              mihonChaptersTotal: nextTotal,
+              chaptersRead: nextEnabled ? nextRead : item.malChaptersRead,
+              chaptersTotal: nextEnabled
+                ? (nextTotal > 0 ? nextTotal : item.malChaptersTotal)
+                : item.malChaptersTotal,
+              hasMihonInFamily: nextEnabled || item.hasMihonInFamily,
+              mihonUsers: nextEnabled
+                ? Array.from(new Set([...(item.mihonUsers ?? []), "Moi"]))
+                : (item.mihonUsers ?? []).filter((label) => label !== "Moi"),
+              mihonUserBadges: nextEnabled
+                ? [
+                    ...(item.mihonUserBadges ?? []),
+                    ...(item.mihonUserBadges?.some((badge) => badge.name === "Moi")
+                      ? []
+                      : [{ name: "Moi", avatarPath: null }]),
+                  ]
+                : (item.mihonUserBadges ?? []).filter((badge) => badge.name !== "Moi"),
+            }
+          : item
+      )
+    );
+    try {
+      const supabase = getSupabaseClient();
+      await setReadingMihonState(supabase, target.id, nextEnabled, {
+        chaptersRead: nextRead,
+        chaptersTotal: nextTotal,
+        preferMihonProgress: nextEnabled,
+      });
+      await loadCollection(true);
+    } catch {
+      setItems((prev) =>
+        prev.map((item) => (item.malId === itemId ? previous : item))
+      );
+    }
+  }
+
+  function navigateToReadingDetail(malId: number) {
+    const container = getMainScrollContainer();
+    const y = readMainScrollTop(container);
+    sessionStorage.setItem(getScrollKey(viewMode), String(y));
+    markReturnToReadingCollection();
+    navigate(`/lectures/${malId}`, {
+      state: buildReadingDetailState(y, viewMode),
+    });
+  }
+
   useEffect(() => {
     if (!activeRun || activeRun.status === "queued" || activeRun.status === "running") {
       return;
@@ -219,33 +340,35 @@ export function ReadingCollectionPage() {
   }, [viewMode]);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem(getScrollKey(viewMode));
-    if (!raw) {
-      return;
-    }
-    const value = Number(raw);
-    if (!Number.isFinite(value)) {
-      return;
-    }
-    const restore = () => {
-      const container = getMainScrollContainer();
-      writeMainScrollTop(container, value);
+    if (location.pathname !== "/lectures") return;
+    const routeState = (location.state as CollectionRestoreState | null) ?? null;
+    const fromBackState =
+      routeState?.fromDetailCollection === "lectures" &&
+      routeState.collectionViewMode === viewMode &&
+      Number.isFinite(routeState.restoreScrollY ?? NaN)
+        ? Number(routeState.restoreScrollY)
+        : null;
+    const fromSession = (() => {
+      const raw = sessionStorage.getItem(getScrollKey(viewMode));
+      if (!raw) return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    })();
+    const value = fromBackState ?? fromSession;
+    if (value === null) return;
+    const applyRestore = () => {
+      writeMainScrollTop(getMainScrollContainer(), value);
     };
-    // Restaurations multiples pour gérer le rendu asynchrone
-    requestAnimationFrame(restore);
-    const timeout1 = window.setTimeout(restore, 50);
-    const timeout2 = window.setTimeout(restore, 150);
-    const timeout3 = window.setTimeout(restore, 300);
-    const timeout4 = window.setTimeout(restore, 500);
+    applyRestore();
+    const rafId = requestAnimationFrame(applyRestore);
+    const timeoutId = window.setTimeout(applyRestore, 120);
     return () => {
-      window.clearTimeout(timeout1);
-      window.clearTimeout(timeout2);
-      window.clearTimeout(timeout3);
-      window.clearTimeout(timeout4);
+      cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
     };
-  }, [viewMode, items.length]);
+  }, [location.pathname, location.state, viewMode]);
 
-  const filtered = useMemo(() => {
+  const filteredBase = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     let base = items.filter((item) => {
       if (tabType !== "Tous" && item.type !== tabType) {
@@ -261,6 +384,12 @@ export function ReadingCollectionPage() {
         return false;
       }
       if (showFamilyCollection && !item.hasFamilyOwners) {
+        return false;
+      }
+      if (showNautiljonPendingOnly && !item.nautiljonNeedsManualImport) {
+        return false;
+      }
+      if (showMihonOnly && !item.hasMihonInFamily) {
         return false;
       }
       if (genreFilter !== "Tous" && !item.genres.includes(genreFilter)) {
@@ -294,7 +423,39 @@ export function ReadingCollectionPage() {
       }
     });
     return base;
-  }, [favoriteOnly, genreFilter, items, query, showFamilyCollection, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
+  }, [favoriteOnly, genreFilter, items, query, showFamilyCollection, showMihonOnly, showNautiljonPendingOnly, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
+
+  const duplicateMalIds = useMemo(() => {
+    const counts = new Map<number, number>();
+    filteredBase.forEach((entry) => {
+      counts.set(entry.malId, (counts.get(entry.malId) ?? 0) + 1);
+    });
+    return new Set(
+      Array.from(counts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([malId]) => malId)
+    );
+  }, [filteredBase]);
+
+  const filtered = useMemo(
+    () =>
+      showDuplicateMalGroups
+        ? filteredBase.filter((entry) => duplicateMalIds.has(entry.malId))
+        : filteredBase,
+    [duplicateMalIds, filteredBase, showDuplicateMalGroups]
+  );
+
+  const duplicateGroups = useMemo(() => {
+    const groups = new Map<number, ReadingCollectionEntry[]>();
+    filtered.forEach((entry) => {
+      if (!duplicateMalIds.has(entry.malId)) return;
+      if (!groups.has(entry.malId)) {
+        groups.set(entry.malId, []);
+      }
+      groups.get(entry.malId)!.push(entry);
+    });
+    return Array.from(groups.entries()).sort((a, b) => a[0] - b[0]);
+  }, [duplicateMalIds, filtered]);
 
   const isUnlimited = pageSize === "all";
   const pageCount = isUnlimited ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -319,8 +480,22 @@ export function ReadingCollectionPage() {
   const stats = useMemo(() => {
     const reading = filtered.filter((x) => x.userStatus === "En cours").length;
     const completed = filtered.filter((x) => x.userStatus === "Terminé").length;
-    const readChapters = filtered.reduce((acc, x) => acc + x.chaptersRead, 0);
-    const totalChapters = filtered.reduce((acc, x) => acc + x.chaptersTotal, 0);
+    const chapterSource = (item: ReadingCollectionEntry) => {
+      if (progressSourceMode === "mal") {
+        return { read: item.malChaptersRead, total: item.malChaptersTotal };
+      }
+      if (progressSourceMode === "mihon") {
+        const total = item.mihonChaptersTotal > 0 ? item.mihonChaptersTotal : item.mihonChaptersRead;
+        return { read: item.mihonChaptersRead, total };
+      }
+      if (item.preferMihonProgress) {
+        const total = item.mihonChaptersTotal > 0 ? item.mihonChaptersTotal : item.mihonChaptersRead;
+        return { read: item.mihonChaptersRead, total };
+      }
+      return { read: item.malChaptersRead, total: item.malChaptersTotal };
+    };
+    const readChapters = filtered.reduce((acc, x) => acc + chapterSource(x).read, 0);
+    const totalChapters = filtered.reduce((acc, x) => acc + chapterSource(x).total, 0);
     const readVolumes = filtered.reduce((acc, x) => acc + x.volumesRead, 0);
     const totalVolumes = filtered.reduce((acc, x) => acc + x.volumesTotal, 0);
     return {
@@ -333,7 +508,11 @@ export function ReadingCollectionPage() {
       chapterRatio: percent(readChapters, totalChapters),
       volumeRatio: percent(readVolumes, totalVolumes),
     };
-  }, [filtered]);
+  }, [filtered, progressSourceMode]);
+  const nautiljonPendingCount = useMemo(
+    () => items.filter((item) => item.nautiljonNeedsManualImport).length,
+    [items]
+  );
 
   function resetFilters() {
     setQuery("");
@@ -344,7 +523,29 @@ export function ReadingCollectionPage() {
     setThemeFilter("Tous");
     setFavoriteOnly(false);
     setShowFamilyCollection(false);
+    setShowNautiljonPendingOnly(false);
+    setShowMihonOnly(false);
+    setShowDuplicateMalGroups(false);
+    setProgressSourceMode("auto");
     setPage(1);
+  }
+
+  async function refreshNautiljonFlags() {
+    setNautiljonRefreshing(true);
+    try {
+      const result = await runNautiljonRefresh({ limit: 100, force: true });
+      await loadCollection(true);
+      notifyToast({
+        kind: "success",
+        message: `Nautiljon: ${result.checked} fiche(s) vérifiée(s), ${result.changed} changement(s), ${result.flagged} à réimporter.`,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Erreur lors de la vérification Nautiljon.";
+      setCollectionError(message);
+      notifyToast({ kind: "error", message });
+    } finally {
+      setNautiljonRefreshing(false);
+    }
   }
 
   async function onStartSync(source: "mal" | "anilist") {
@@ -474,7 +675,7 @@ export function ReadingCollectionPage() {
       <div className="anime-collection-head">
         <h1 className="library-page-title anime-collection-title">Collection Lectures</h1>
         <div className="anime-collection-head-actions">
-          <button type="button" className="anime-collection-btn" onClick={() => void loadCollection()}>
+          <button type="button" className="anime-collection-btn" onClick={() => void loadCollection(true)}>
             Recharger
           </button>
           <button
@@ -500,15 +701,29 @@ export function ReadingCollectionPage() {
             className="anime-collection-btn"
             disabled={detectingChanges}
             onClick={() => void detectChanges("mal")}
-            title="Vérifier les modifications MAL/Jikan"
+            title="Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
           >
-            {detectingChanges ? "Détection..." : "Détecter changements"}
+            {detectingChanges ? "Détection..." : "Détecter changements (pré-sync)"}
+          </button>
+          <button
+            type="button"
+            className="anime-collection-btn"
+            disabled={nautiljonRefreshing}
+            onClick={() => void refreshNautiljonFlags()}
+            title="Vérifie les pages Nautiljon liées et marque les fiches à réimporter."
+          >
+            {nautiljonRefreshing ? "Nautiljon..." : "Vérifier Nautiljon"}
           </button>
           <button type="button" className="library-add-anime-btn" onClick={() => setAddOpen(true)}>
             + Ajouter une lecture
           </button>
         </div>
       </div>
+      {nautiljonPendingCount > 0 ? (
+        <p className="library-page-lead">
+          Nautiljon: {nautiljonPendingCount} fiche(s) à réimporter manuellement.
+        </p>
+      ) : null}
 
       {collectionError ? <p className="library-page-lead">{collectionError}</p> : null}
 
@@ -620,6 +835,17 @@ export function ReadingCollectionPage() {
               ))}
             </select>
           </label>
+          <label className="anime-collection-filter-field">
+            <span>Source progression</span>
+            <select
+              value={progressSourceMode}
+              onChange={(e) => setProgressSourceMode(e.target.value as ProgressSourceMode)}
+            >
+              <option value="auto">Auto (par entrée)</option>
+              <option value="mal">MAL</option>
+              <option value="mihon">MIHON</option>
+            </select>
+          </label>
 
           <div className="anime-collection-filter-field anime-collection-filter-field-toggle">
             <span>Affichage collection</span>
@@ -632,6 +858,21 @@ export function ReadingCollectionPage() {
               checked={showFamilyCollection}
               onChange={setShowFamilyCollection}
               label="Collection famille"
+            />
+            <ToggleSwitch
+              checked={showNautiljonPendingOnly}
+              onChange={setShowNautiljonPendingOnly}
+              label="Nautiljon à réimporter"
+            />
+            <ToggleSwitch
+              checked={showMihonOnly}
+              onChange={setShowMihonOnly}
+              label="Présent sur Mihon"
+            />
+            <ToggleSwitch
+              checked={showDuplicateMalGroups}
+              onChange={setShowDuplicateMalGroups}
+              label="Regrouper doublons MAL ID"
             />
           </div>
         </div>
@@ -688,8 +929,66 @@ export function ReadingCollectionPage() {
       </section>
 
       <section className={viewMode === "grid" ? "anime-collection-grid" : "anime-collection-list"}>
-        {pageSlice.map((item) => {
-          const chapterProgress = percent(item.chaptersRead, item.chaptersTotal);
+        {showDuplicateMalGroups ? (
+          <div style={{ display: "grid", gap: "12px", gridColumn: "1 / -1" }}>
+            {duplicateGroups.length === 0 ? (
+              <div className="library-page-lead">
+                Aucun MAL ID dupliqué sur la sélection actuelle.
+              </div>
+            ) : (
+              duplicateGroups.map(([malId, entries]) => (
+                <article key={`dup-${malId}`} className="anime-collection-card" style={{ padding: "12px" }}>
+                  <strong>MAL ID {malId}</strong>
+                  <div
+                    style={{
+                      marginTop: "8px",
+                      display: "grid",
+                      gap: "8px",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                    }}
+                  >
+                    {entries.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        className="anime-collection-btn"
+                        style={{ textAlign: "left" }}
+                        onClick={() => navigateToReadingDetail(entry.malId)}
+                        title={entry.title}
+                      >
+                        <div>{entry.title}</div>
+                        <small>
+                          {entry.userStatus} — Mihon:{" "}
+                          {(entry.mihonUsers ?? []).length > 0 ? (entry.mihonUsers ?? []).join(", ") : "aucun"}
+                        </small>
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        ) : pageSlice.map((item) => {
+          const mihonUsers = item.mihonUsers ?? [];
+          const mihonUserBadges = item.mihonUserBadges ?? [];
+          const chapterRead =
+            progressSourceMode === "mal"
+              ? item.malChaptersRead
+              : progressSourceMode === "mihon"
+                ? item.mihonChaptersRead
+                : item.preferMihonProgress
+                  ? item.mihonChaptersRead
+                  : item.malChaptersRead;
+          const chapterTotalRaw =
+            progressSourceMode === "mal"
+              ? item.malChaptersTotal
+              : progressSourceMode === "mihon"
+                ? item.mihonChaptersTotal
+                : item.preferMihonProgress
+                  ? item.mihonChaptersTotal
+                  : item.malChaptersTotal;
+          const chapterTotal = chapterTotalRaw > 0 ? chapterTotalRaw : chapterRead;
+          const chapterProgress = percent(chapterRead, chapterTotal);
           const volumeProgress = percent(item.volumesRead, item.volumesTotal);
           return (
             <article
@@ -702,10 +1001,7 @@ export function ReadingCollectionPage() {
                 if (target.closest("button,a,input,select,textarea,label")) {
                   return;
                 }
-                const container = getMainScrollContainer();
-                const y = readMainScrollTop(container);
-                sessionStorage.setItem(getScrollKey(viewMode), String(y));
-                navigate(`/lectures/${item.malId}`);
+                navigateToReadingDetail(item.malId);
               }}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" && e.key !== " ") {
@@ -716,10 +1012,7 @@ export function ReadingCollectionPage() {
                   return;
                 }
                 e.preventDefault();
-                const container = getMainScrollContainer();
-                const y = readMainScrollTop(container);
-                sessionStorage.setItem(getScrollKey(viewMode), String(y));
-                navigate(`/lectures/${item.malId}`);
+                navigateToReadingDetail(item.malId);
               }}
             >
               {item.favorite ? (
@@ -729,10 +1022,9 @@ export function ReadingCollectionPage() {
               ) : null}
               <Link
                 to={`/lectures/${item.malId}`}
-                onClick={() => {
-                  const container = getMainScrollContainer();
-                  const y = readMainScrollTop(container);
-                  sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateToReadingDetail(item.malId);
                 }}
                 className="anime-collection-cover-link"
               >
@@ -754,16 +1046,29 @@ export function ReadingCollectionPage() {
                       ) : null}
                       <Link
                         to={`/lectures/${item.malId}`}
-                        onClick={() => {
-                          const container = getMainScrollContainer();
-                          const y = readMainScrollTop(container);
-                          sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                        onClick={(e) => {
+                          e.preventDefault();
+                          navigateToReadingDetail(item.malId);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}
                       >
                         {item.title}
                       </Link>
+                      {mihonUserBadges.length > 0 ? (
+                        <div className="anime-collection-owners-inline" title={`Mihon: ${mihonUsers.join(", ")}`}>
+                          {mihonUserBadges.map((badge, idx) => (
+                            <span key={`${badge.name}-${idx}`} className="anime-collection-owner-chip">
+                              <ProfileAvatarImage
+                                size={18}
+                                storagePath={badge.avatarPath}
+                                displayName={badge.name}
+                              />
+                              <span>{badge.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="anime-collection-list-line2">
                       <div className="anime-collection-status-row">
@@ -774,10 +1079,15 @@ export function ReadingCollectionPage() {
                           {item.workStatus}
                         </span>
                       </div>
+                      {mihonUsers.length > 0 ? (
+                        <small className="anime-collection-progress-label">
+                          Mihon: {mihonUsers.join(", ")}
+                        </small>
+                      ) : null}
                       <div className="anime-collection-double-progress anime-collection-double-progress-list">
                         <div className="anime-collection-progress-row">
                           <small className="anime-collection-progress-label">
-                            {item.chaptersRead}/{item.chaptersTotal || "?"} ch.
+                            {chapterRead}/{chapterTotal || "?"} ch.
                           </small>
                           <div className={`anime-collection-progress anime-collection-progress-inline${item.userStatus === "Terminé" ? " is-completed" : ""}`}>
                             <div style={{ width: `${chapterProgress}%` }} />
@@ -805,7 +1115,7 @@ export function ReadingCollectionPage() {
                     <div className="anime-collection-double-progress">
                       <div className="anime-collection-progress-row">
                         <small className="anime-collection-progress-label">
-                          {item.chaptersRead}/{item.chaptersTotal || "?"} ch.
+                          {chapterRead}/{chapterTotal || "?"} ch.
                         </small>
                         <div className={`anime-collection-progress anime-collection-progress-small${item.userStatus === "Terminé" ? " is-completed" : ""}`}>
                           <div style={{ width: `${chapterProgress}%` }} />
@@ -829,16 +1139,29 @@ export function ReadingCollectionPage() {
                     <div className="anime-collection-title-row">
                       <Link
                         to={`/lectures/${item.malId}`}
-                        onClick={() => {
-                          const container = getMainScrollContainer();
-                          const y = readMainScrollTop(container);
-                          sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                        onClick={(e) => {
+                          e.preventDefault();
+                          navigateToReadingDetail(item.malId);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}
                       >
                         {item.title}
                       </Link>
+                      {mihonUserBadges.length > 0 ? (
+                        <div className="anime-collection-owners-inline" title={`Mihon: ${mihonUsers.join(", ")}`}>
+                          {mihonUserBadges.map((badge, idx) => (
+                            <span key={`${badge.name}-${idx}`} className="anime-collection-owner-chip">
+                              <ProfileAvatarImage
+                                size={18}
+                                storagePath={badge.avatarPath}
+                                displayName={badge.name}
+                              />
+                              <span>{badge.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   </>
                 )}
@@ -863,6 +1186,9 @@ export function ReadingCollectionPage() {
                   onClose={() => setMenuOpenFor(null)}
                   onSelect={(status) => updateUserStatus(item.malId, status)}
                   onToggleFavorite={() => void updateFavorite(item.malId)}
+                  mihonEnabled={item.mihonEnabledByCurrentUser}
+                  onToggleMihon={() => void toggleMihonEntry(item.malId)}
+                  onDelete={() => void removeEntry(item.malId)}
                 />
               </>
             </article>

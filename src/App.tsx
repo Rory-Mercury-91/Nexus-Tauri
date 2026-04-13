@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { DataLoadingOverlay } from "@/components/common/DataLoadingOverlay";
 import { AppToastHost } from "@/components/common/AppToastHost";
 import { ScrollToTop } from "@/components/common/ScrollToTop";
@@ -17,6 +17,9 @@ import { getSupabaseClient } from "@/lib/supabaseClient";
 import { HomePage } from "@/pages/home/HomePage";
 import { LoginPage } from "@/pages/auth/login/LoginPage";
 import { RegisterPage } from "@/pages/auth/register/RegisterPage";
+import { ForgotPasswordPage } from "@/pages/auth/forgotPassword/ForgotPasswordPage";
+import { AuthCallbackPage } from "@/pages/auth/authCallback/AuthCallbackPage";
+import { ResetPasswordPage } from "@/pages/auth/resetPassword/ResetPasswordPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { AnimeCollectionPage } from "@/pages/library/AnimeCollectionPage";
 import { AnimeDetailPage } from "@/pages/library/AnimeDetailPage/AnimeDetailPage";
@@ -24,13 +27,27 @@ import { ReadingCollectionPage } from "@/pages/library/ReadingCollectionPage";
 import { ReadingDetailPage } from "@/pages/library/ReadingDetailPage";
 import { SubscriptionsPage } from "@/pages/subscriptions/SubscriptionsPage";
 import { useSession } from "@/hooks/useSession";
+import { initTauriAuthDeepLinks } from "@/services/auth/authRedirectService";
 
 function AppRoutes() {
   const { session, loading: sessionLoading } = useSession();
   const [avatarPath, setAvatarPath] = useState<string | null>(null);
   const [profileTick, setProfileTick] = useState(0);
+  const location = useLocation();
+  const isPublicAuthPath =
+    location.pathname === "/login" ||
+    location.pathname === "/register" ||
+    location.pathname.startsWith("/auth/");
+  const isAnimeDetail = /^\/anime\/\d+/.test(location.pathname);
+  const isReadingDetail = /^\/lectures\/\d+/.test(location.pathname);
+  const renderAnimeSection = location.pathname === "/anime" || isAnimeDetail;
+  const renderReadingSection = location.pathname === "/lectures" || isReadingDetail;
   /** Prêt à afficher l’app : session connue + premier chargement profil terminé si connecté. */
   const [initialDataReady, setInitialDataReady] = useState(false);
+
+  useEffect(() => {
+    void initTauriAuthDeepLinks();
+  }, []);
 
   useEffect(() => {
     const onBump = () => setProfileTick((t) => t + 1);
@@ -123,8 +140,21 @@ function AppRoutes() {
     return <DataLoadingOverlay />;
   }
 
-  if (!session) {
+  if (!session && !isPublicAuthPath) {
     return <div className="session-auth-host" aria-hidden />;
+  }
+
+  if (!session) {
+    return (
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
   }
 
   return (
@@ -141,18 +171,31 @@ function AppRoutes() {
             <ScrollToTop />
             <AppToastHost />
             <NautiljonImportReceptionModal />
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/anime" element={<AnimeCollectionPage />} />
-              <Route path="/anime/:id" element={<AnimeDetailPage />} />
-              <Route path="/lectures" element={<ReadingCollectionPage />} />
-              <Route path="/lectures/:id" element={<ReadingDetailPage />} />
-              <Route path="/subscriptions" element={<SubscriptionsPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+          {renderAnimeSection && (
+            <div style={{ display: isAnimeDetail ? "none" : undefined }}>
+              <AnimeCollectionPage />
+            </div>
+          )}
+          {renderReadingSection && (
+            <div style={{ display: isReadingDetail ? "none" : undefined }}>
+              <ReadingCollectionPage />
+            </div>
+          )}
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/anime" element={null} />
+            <Route path="/anime/:id" element={<AnimeDetailPage />} />
+            <Route path="/lectures" element={null} />
+            <Route path="/lectures/:id" element={<ReadingDetailPage />} />
+            <Route path="/subscriptions" element={<SubscriptionsPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
+            <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
           </AppShell>
         </ReadingSyncProgressProvider>
       </SyncProgressProvider>

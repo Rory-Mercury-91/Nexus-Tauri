@@ -12,9 +12,10 @@ import { uploadUserAvatarObject } from "@/services/storage/avatarStorage";
 import { useSession } from "@/hooks/useSession";
 import { FamilySettingsPanel } from "./FamilySettingsPanel";
 import { IntegrationsSettingsPanel } from "./IntegrationsSettingsPanel";
+import { MihonSettingsPanel } from "./MihonSettingsPanel";
 import "./SettingsPage.css";
 
-type SettingsTab = "profile" | "security" | "family" | "integrations";
+type SettingsTab = "profile" | "security" | "family" | "integrations" | "mihon";
 
 /**
  * Paramètres en onglets : profil (pseudo + photo) et sécurité (mot de passe).
@@ -221,6 +222,22 @@ export function SettingsPage() {
         >
           Intégrations
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "mihon"}
+          className={
+            tab === "mihon"
+              ? "settings-tab settings-tab-active"
+              : "settings-tab"
+          }
+          onClick={() => {
+            setTab("mihon");
+            clearFeedback();
+          }}
+        >
+          Mihon
+        </button>
       </div>
 
       {error ? <p className="settings-error">{error}</p> : null}
@@ -234,18 +251,18 @@ export function SettingsPage() {
         <div className="settings-tab-panel" role="tabpanel">
           <IntegrationsSettingsPanel />
         </div>
+      ) : tab === "mihon" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <MihonSettingsPanel />
+        </div>
       ) : tab === "profile" ? (
         <div className="settings-tab-panel" role="tabpanel">
           <section className="settings-block" aria-labelledby="settings-pseudo">
             <h2 id="settings-pseudo" className="settings-block-title">
               Pseudo
             </h2>
-            <p className="settings-block-lead">
-              Visible dans l’application et pour les membres de tes foyers.
-            </p>
             <form className="settings-form" onSubmit={handlePseudoSubmit}>
               <div className="settings-field">
-                <label htmlFor="settings-pseudo-input">Pseudo</label>
                 <input
                   id="settings-pseudo-input"
                   type="text"
@@ -269,9 +286,6 @@ export function SettingsPage() {
             <h2 id="settings-photo" className="settings-block-title">
               Photo de profil
             </h2>
-            <p className="settings-block-lead">
-              Visible par les membres de tes foyers (stockage privé Supabase).
-            </p>
             {avatarPath && (
               <div className="settings-avatar-preview">
                 <span className="settings-field-label">Photo actuelle</span>
@@ -307,9 +321,6 @@ export function SettingsPage() {
             <h2 id="settings-password" className="settings-block-title">
               Mot de passe
             </h2>
-            <p className="settings-block-lead">
-              Saisis ton mot de passe actuel puis le nouveau (deux fois).
-            </p>
             <form className="settings-form" onSubmit={handlePasswordSubmit}>
               <div className="settings-field">
                 <label htmlFor="settings-current-pw">Mot de passe actuel</label>

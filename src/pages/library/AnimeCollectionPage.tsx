@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AddAnimeModal } from "@/features/library/AddAnimeModal/AddAnimeModal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
@@ -9,10 +9,17 @@ import { getSupabaseClient } from "@/lib/supabaseClient";
 import { useSession } from "@/hooks/useSession";
 import {
   fetchAnimeCollection,
+  fetchAnimeCollectionStamp,
+  deleteAnimeEntry,
   updateAnimeFavorite,
   updateAnimeWatchStatus,
   type AnimeCollectionEntry,
 } from "@/services/library/animeCollectionService";
+import {
+  isSameCollectionStamp,
+  readCachedCollection,
+  writeCachedCollection,
+} from "@/services/library/collectionCacheService";
 import {
   detectResyncChanges,
   applyResyncChanges,
@@ -27,6 +34,11 @@ import "./LibraryPages.css";
 import "./AnimeCollectionPage.css";
 
 type ViewMode = "grid" | "list";
+type CollectionRestoreState = {
+  fromDetailCollection?: "anime";
+  restoreScrollY?: number;
+  collectionViewMode?: ViewMode;
+};
 type UserStatus = "Planifié" | "En cours" | "En pause" | "Terminé" | "Abandonné";
 type WorkStatus = "En cours" | "Terminé" | "Abandonné" | "À venir";
 type SortMode =
@@ -42,10 +54,12 @@ type AnimeItem = AnimeCollectionEntry;
 
 const SCROLL_KEY_GRID = "anime-collection:scroll-main:grid";
 const SCROLL_KEY_LIST = "anime-collection:scroll-main:list";
+const RETURN_TO_COLLECTION_KEY = "app:scroll:return-to-collection";
 const VIEW_MODE_KEY = "anime-collection:view-mode";
 const GROUP_MODE_KEY = "anime-collection:group-mode";
 const USER_STATUS_ORDER: UserStatus[] = ["Planifié", "En cours", "En pause", "Terminé", "Abandonné"];
 const WORK_STATUS_ORDER: WorkStatus[] = ["En cours", "Terminé", "Abandonné", "À venir"];
+const ANIME_COLLECTION_CACHE_KEY = "library:anime:collection:cache:v1";
 
 
 function percent(value: number, total: number): number {
@@ -89,6 +103,18 @@ function workStatusClass(status: WorkStatus): string {
 
 function getScrollKey(mode: ViewMode): string {
   return mode === "list" ? SCROLL_KEY_LIST : SCROLL_KEY_GRID;
+}
+
+function markReturnToAnimeCollection(): void {
+  sessionStorage.setItem(RETURN_TO_COLLECTION_KEY, "anime");
+}
+
+function buildAnimeDetailState(scrollY: number, mode: ViewMode) {
+  return {
+    fromCollection: "anime" as const,
+    collectionScrollY: scrollY,
+    collectionViewMode: mode,
+  };
 }
 
 function aggregateUserStatus(items: AnimeItem[]): UserStatus {
@@ -170,6 +196,7 @@ function buildGroupedAnimeItems(items: AnimeItem[]): AnimeItem[] {
 
 export function AnimeCollectionPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { session } = useSession();
   const userId = session?.user?.id ?? "";
   const [addOpen, setAddOpen] = useState(false);
@@ -208,7 +235,6 @@ export function AnimeCollectionPage() {
   const lazySentinelRef = useRef<HTMLDivElement | null>(null);
   const [lazyVisibleCount, setLazyVisibleCount] = useState(30);
   const sourceItems = useMemo(() => (groupMode ? buildGroupedAnimeItems(items) : items), [groupMode, items]);
-
   const types = useMemo(() => {
     const counts = new Map<string, number>();
     sourceItems.forEach((item) => counts.set(item.type, (counts.get(item.type) ?? 0) + 1));
@@ -229,12 +255,20 @@ export function AnimeCollectionPage() {
     [sourceItems]
   );
 
-  const loadCollection = useCallback(async () => {
+  const loadCollection = useCallback(async (forceRefresh = false) => {
     setLoadingCollection(true);
     try {
       const supabase = getSupabaseClient();
+      const remoteStamp = await fetchAnimeCollectionStamp(supabase);
+      const cached = readCachedCollection<AnimeItem>(ANIME_COLLECTION_CACHE_KEY);
+      if (!forceRefresh && cached && isSameCollectionStamp(cached.stamp, remoteStamp)) {
+        setItems(cached.items);
+        setCollectionError(null);
+        return;
+      }
       const rows = await fetchAnimeCollection(supabase);
       setItems(rows);
+      writeCachedCollection(ANIME_COLLECTION_CACHE_KEY, rows, remoteStamp);
       setCollectionError(null);
     } catch (e) {
       setCollectionError(e instanceof Error ? e.message : "Impossible de charger la collection.");
@@ -337,23 +371,12 @@ export function AnimeCollectionPage() {
   }
 
   useEffect(() => {
-    void loadCollection();
-  }, [loadCollection]);
-
-  useEffect(() => {
-    const container = getMainScrollContainer();
-    const scrollKey = getScrollKey(viewMode);
-    const handler = () => {
-      const y = readMainScrollTop(container);
-      sessionStorage.setItem(scrollKey, String(y));
-    };
-    if (container) {
-      container.addEventListener("scroll", handler);
-      return () => container.removeEventListener("scroll", handler);
+    const cached = readCachedCollection<AnimeItem>(ANIME_COLLECTION_CACHE_KEY);
+    if (cached) {
+      setItems(cached.items);
     }
-    window.addEventListener("scroll", handler);
-    return () => window.removeEventListener("scroll", handler);
-  }, [viewMode]);
+    void loadCollection(false);
+  }, [loadCollection]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -491,31 +514,33 @@ export function AnimeCollectionPage() {
     [lazyVisibleCount, pageSlice]
   );
   useEffect(() => {
-    const raw = sessionStorage.getItem(getScrollKey(viewMode));
-    if (!raw) {
-      return;
-    }
-    const value = Number(raw);
-    if (!Number.isFinite(value)) {
-      return;
-    }
-    const restore = () => {
-      const container = getMainScrollContainer();
-      writeMainScrollTop(container, value);
+    if (location.pathname !== "/anime") return;
+    const routeState = (location.state as CollectionRestoreState | null) ?? null;
+    const fromBackState =
+      routeState?.fromDetailCollection === "anime" &&
+      routeState.collectionViewMode === viewMode &&
+      Number.isFinite(routeState.restoreScrollY ?? NaN)
+        ? Number(routeState.restoreScrollY)
+        : null;
+    const fromSession = (() => {
+      const raw = sessionStorage.getItem(getScrollKey(viewMode));
+      if (!raw) return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    })();
+    const value = fromBackState ?? fromSession;
+    if (value === null) return;
+    const applyRestore = () => {
+      writeMainScrollTop(getMainScrollContainer(), value);
     };
-    // Restaurations multiples pour gérer le rendu asynchrone
-    requestAnimationFrame(restore);
-    const timeout1 = window.setTimeout(restore, 50);
-    const timeout2 = window.setTimeout(restore, 150);
-    const timeout3 = window.setTimeout(restore, 300);
-    const timeout4 = window.setTimeout(restore, 500);
+    applyRestore();
+    const rafId = requestAnimationFrame(applyRestore);
+    const timeoutId = window.setTimeout(applyRestore, 120);
     return () => {
-      window.clearTimeout(timeout1);
-      window.clearTimeout(timeout2);
-      window.clearTimeout(timeout3);
-      window.clearTimeout(timeout4);
+      cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
     };
-  }, [viewMode, sourceItems.length]);
+  }, [location.pathname, location.state, viewMode]);
   const pageStart = filtered.length === 0 ? 0 : isUnlimited ? 1 : (safePage - 1) * pageSize + 1;
   const pageEnd = filtered.length === 0 ? 0 : isUnlimited ? renderedItems.length : Math.min(filtered.length, safePage * pageSize);
 
@@ -583,12 +608,44 @@ export function AnimeCollectionPage() {
     }
   }
 
+  async function removeEntry(itemId: number) {
+    const target = items.find((entry) => entry.malId === itemId);
+    if (!target) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Supprimer définitivement "${target.title}" de la collection ?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const supabase = getSupabaseClient();
+      await deleteAnimeEntry(supabase, target.id);
+      setItems((prev) => prev.filter((entry) => entry.id !== target.id));
+    } catch (error) {
+      setCollectionError(
+        error instanceof Error ? error.message : "Suppression impossible."
+      );
+    }
+  }
+
+  function navigateToAnimeDetail(malId: number) {
+    const container = getMainScrollContainer();
+    const y = readMainScrollTop(container);
+    sessionStorage.setItem(getScrollKey(viewMode), String(y));
+    markReturnToAnimeCollection();
+    navigate(`/anime/${malId}`, {
+      state: buildAnimeDetailState(y, viewMode),
+    });
+  }
+
   return (
     <div className="library-page anime-collection-page">
       <div className="anime-collection-head">
         <h1 className="library-page-title anime-collection-title">Collection Animés</h1>
         <div className="anime-collection-head-actions">
-          <button type="button" className="anime-collection-btn" onClick={() => void loadCollection()}>
+          <button type="button" className="anime-collection-btn" onClick={() => void loadCollection(true)}>
             Recharger
           </button>
           <button
@@ -614,9 +671,9 @@ export function AnimeCollectionPage() {
             className="anime-collection-btn"
             disabled={detectingChanges}
             onClick={() => void detectChanges("mal")}
-            title="Vérifier les modifications MAL/Jikan"
+            title="Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
           >
-            {detectingChanges ? "Détection..." : "Détecter changements"}
+            {detectingChanges ? "Détection..." : "Détecter changements (pré-sync)"}
           </button>
           <button type="button" className="library-add-anime-btn" onClick={() => setAddOpen(true)}>
             + Ajouter un animé
@@ -829,10 +886,7 @@ export function AnimeCollectionPage() {
                 if (target.closest("button,a,input,select,textarea,label")) {
                   return;
                 }
-                const container = getMainScrollContainer();
-                const y = readMainScrollTop(container);
-                sessionStorage.setItem(getScrollKey(viewMode), String(y));
-                navigate(`/anime/${item.malId}`);
+                navigateToAnimeDetail(item.malId);
               }}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" && e.key !== " ") {
@@ -843,10 +897,7 @@ export function AnimeCollectionPage() {
                   return;
                 }
                 e.preventDefault();
-                const container = getMainScrollContainer();
-                const y = readMainScrollTop(container);
-                sessionStorage.setItem(getScrollKey(viewMode), String(y));
-                navigate(`/anime/${item.malId}`);
+                navigateToAnimeDetail(item.malId);
               }}
             >
               {item.favorite ? (
@@ -856,10 +907,9 @@ export function AnimeCollectionPage() {
               ) : null}
               <Link
                 to={`/anime/${item.malId}`}
-                onClick={() => {
-                  const container = getMainScrollContainer();
-                  const y = readMainScrollTop(container);
-                  sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateToAnimeDetail(item.malId);
                 }}
                 className="anime-collection-cover-link"
               >
@@ -881,10 +931,9 @@ export function AnimeCollectionPage() {
                       ) : null}
                       <Link
                         to={`/anime/${item.malId}`}
-                        onClick={() => {
-                          const container = getMainScrollContainer();
-                          const y = readMainScrollTop(container);
-                          sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                        onClick={(e) => {
+                          e.preventDefault();
+                          navigateToAnimeDetail(item.malId);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}
@@ -940,10 +989,9 @@ export function AnimeCollectionPage() {
                     <div className="anime-collection-title-row">
                       <Link
                         to={`/anime/${item.malId}`}
-                        onClick={() => {
-                          const container = getMainScrollContainer();
-                          const y = readMainScrollTop(container);
-                          sessionStorage.setItem(getScrollKey(viewMode), String(y));
+                        onClick={(e) => {
+                          e.preventDefault();
+                          navigateToAnimeDetail(item.malId);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}
@@ -975,6 +1023,7 @@ export function AnimeCollectionPage() {
                     onClose={() => setMenuOpenFor(null)}
                     onSelect={(status) => updateUserStatus(item.malId, status)}
                     onToggleFavorite={() => void updateFavorite(item.malId)}
+                  onDelete={() => void removeEntry(item.malId)}
                   />
                 </>
               )}

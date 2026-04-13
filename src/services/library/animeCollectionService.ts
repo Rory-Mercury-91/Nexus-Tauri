@@ -19,6 +19,10 @@ export type AnimeCollectionEntry = {
   relatedAnimeIds: number[];
 };
 
+const PG_INT_MAX = 2_147_483_647;
+const MANUAL_ID_MIN = 1_900_000_000;
+const MANUAL_ID_MAX = 2_100_000_000;
+
 function normalizeStatus(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -156,6 +160,31 @@ export async function fetchAnimeCollection(supabase: SupabaseClient): Promise<An
   });
 }
 
+export async function fetchAnimeCollectionStamp(
+  supabase: SupabaseClient
+): Promise<{ latestUpdatedAt: string | null; count: number }> {
+  const [{ data: latestRows, error: latestError }, { count, error: countError }] = await Promise.all([
+    supabase
+      .from("library_anime")
+      .select("updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("library_anime")
+      .select("id", { count: "exact", head: true }),
+  ]);
+  if (latestError) {
+    throw new Error(latestError.message);
+  }
+  if (countError) {
+    throw new Error(countError.message);
+  }
+  return {
+    latestUpdatedAt: latestRows?.[0]?.updated_at ?? null,
+    count: Number(count ?? 0),
+  };
+}
+
 export async function updateAnimeWatchStatus(
   supabase: SupabaseClient,
   rowId: string,
@@ -186,6 +215,179 @@ export async function updateAnimeFavorite(
       updated_at: new Date().toISOString(),
     })
     .eq("id", rowId);
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+function buildManualAnimeFull(malId: number, title: string, imageUrl: string): Record<string, unknown> {
+  return {
+    mal_id: malId,
+    url: `https://myanimelist.net/anime/${malId}`,
+    title,
+    title_english: title,
+    title_japanese: "",
+    title_synonyms: [],
+    type: "TV",
+    status: "Not yet aired",
+    rating: "PG-13",
+    source: "Unknown",
+    episodes: 0,
+    duration: "",
+    synopsis: "",
+    aired: { string: "" },
+    trailer: { embed_url: "" },
+    images: {
+      jpg: {
+        image_url: imageUrl,
+        large_image_url: imageUrl,
+      },
+      webp: {
+        image_url: imageUrl,
+        large_image_url: imageUrl,
+      },
+    },
+    genres: [],
+    themes: [],
+    demographics: [],
+    studios: [],
+    producers: [],
+    licensors: [],
+    relations: [],
+  };
+}
+
+export async function createManualAnimeEntry(
+  supabase: SupabaseClient,
+  input: {
+    title: string;
+    malId?: number;
+    imageUrl?: string;
+    titleEnglish?: string;
+    titleJapanese?: string;
+    titleAlternatives?: string[];
+    mediaType?: string;
+    workStatus?: string;
+    source?: string;
+    episodes?: number;
+    duration?: string;
+    synopsis?: string;
+    synopsisFr?: string;
+    rating?: string;
+    seasonLabel?: string;
+    linkMal?: string;
+    linkNautiljon?: string;
+    linkAnilist?: string;
+    streamCrunchyroll?: string;
+    streamPrimeVideo?: string;
+    streamDisneyPlus?: string;
+    streamAdn?: string;
+    streamAnimeSama?: string;
+    trailerUrl?: string;
+    userStatus?: AnimeCollectionEntry["userStatus"];
+    favorite?: boolean;
+  }
+): Promise<number> {
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error("Le titre est obligatoire.");
+  }
+  const malId = await resolveManualAnimeMalId(supabase, input.malId);
+  const imageUrl = (input.imageUrl ?? "").trim();
+  const full = buildManualAnimeFull(malId, title, imageUrl);
+  full.title_english = input.titleEnglish?.trim() || title;
+  full.title_japanese = input.titleJapanese?.trim() || "";
+  full.title_synonyms = input.titleAlternatives ?? [];
+  full.type = input.mediaType?.trim() || "TV";
+  full.status = input.workStatus?.trim() || "Not yet aired";
+  full.source = input.source?.trim() || "Unknown";
+  full.rating = input.rating?.trim() || "PG-13";
+  full.season = input.seasonLabel?.trim() || "";
+  full.episodes = Math.max(0, Number(input.episodes ?? 0));
+  full.duration = input.duration?.trim() || "";
+  full.synopsis = input.synopsis?.trim() || "";
+  full.url = input.linkMal?.trim() || `https://myanimelist.net/anime/${malId}`;
+  full.trailer = {
+    embed_url: input.trailerUrl?.trim() || "",
+  };
+  const userStatus = input.userStatus ?? "Planifié";
+  const favorite = Boolean(input.favorite ?? false);
+  const malSnapshot = {
+    list_entry: {
+      list_status: {
+        status: mapUserStatusToWatchStatus(userStatus),
+        score: 0,
+        num_episodes_watched: 0,
+        is_favorite: favorite,
+      },
+    },
+    manual_overrides: {
+      title_fr: title,
+      synopsis_fr: input.synopsisFr?.trim() || "",
+      locked_field_ids: ["title", "status", "episodes", "synopsis"],
+      links: {
+        mal: input.linkMal?.trim() || "",
+        nautiljon: input.linkNautiljon?.trim() || "",
+        anilist: input.linkAnilist?.trim() || "",
+        crunchyroll: input.streamCrunchyroll?.trim() || "",
+        prime_video: input.streamPrimeVideo?.trim() || "",
+        disney_plus: input.streamDisneyPlus?.trim() || "",
+        adn: input.streamAdn?.trim() || "",
+        anime_sama: input.streamAnimeSama?.trim() || "",
+      },
+    },
+  };
+  const { error } = await supabase.from("library_anime").insert({
+    mal_id: malId,
+    title,
+    title_english: String(full.title_english ?? title),
+    watch_status: mapUserStatusToWatchStatus(userStatus),
+    is_favorite: favorite,
+    main_picture_url: imageUrl || null,
+    jikan_snapshot: { full, pictures: [], episodes: [] },
+    mal_official_snapshot: malSnapshot,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return malId;
+}
+
+async function resolveManualAnimeMalId(
+  supabase: SupabaseClient,
+  preferredMalId?: number
+): Promise<number> {
+  if (Number.isFinite(preferredMalId) && (preferredMalId ?? 0) > 0) {
+    const value = Number(preferredMalId);
+    if (value > PG_INT_MAX) {
+      throw new Error("Le MAL ID manuel dépasse la limite autorisée.");
+    }
+    return value;
+  }
+  for (let i = 0; i < 16; i += 1) {
+    const candidate =
+      MANUAL_ID_MIN + Math.floor(Math.random() * (MANUAL_ID_MAX - MANUAL_ID_MIN));
+    const { data, error } = await supabase
+      .from("library_anime")
+      .select("id")
+      .eq("mal_id", candidate)
+      .maybeSingle();
+    if (error) {
+      throw new Error(error.message);
+    }
+    if (!data) {
+      return candidate;
+    }
+  }
+  throw new Error("Impossible de générer un identifiant manuel unique.");
+}
+
+export async function deleteAnimeEntry(
+  supabase: SupabaseClient,
+  rowId: string
+): Promise<void> {
+  const { error } = await supabase.from("library_anime").delete().eq("id", rowId);
   if (error) {
     throw new Error(error.message);
   }

@@ -296,11 +296,6 @@ export function SubscriptionsPage() {
       <header className="subscriptions-header">
         <div>
           <h1 className="subscriptions-page-title">Abonnements</h1>
-          <p className="subscriptions-page-lead">
-            Abonnements récurrents et achats ponctuels partagés. Tu ne vois que
-            les entrées dont tu es propriétaire (ta part est indiquée dans les
-            totaux).
-          </p>
         </div>
         <div className="subscriptions-header-actions">
           <button
@@ -393,12 +388,6 @@ export function SubscriptionsPage() {
             </span>
           </div>
         </div>
-        <p className="subscriptions-summary-hint">
-          Mensuel / annuel : équivalent selon la période facturée (hebdo →
-          ×52/12, mensuel tel quel, annuel ÷12). « Autre » : le prix saisi est
-          traité comme un montant mensuel pour l’estimation, sauf précision dans
-          les notes.
-        </p>
       </section>
 
       <section className="subscriptions-section" aria-labelledby="rec-title">

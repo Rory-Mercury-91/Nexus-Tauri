@@ -224,28 +224,6 @@ async function claimNextJob(): Promise<JobRow | null> {
   return locked as JobRow;
 }
 
-async function mapMalRows(accessToken: string) {
-  const out: Array<Record<string, unknown>> = [];
-  let offset = 0;
-  while (true) {
-    const url = new URL(`${MAL_API}/users/@me/animelist`);
-    url.searchParams.set("limit", "100");
-    url.searchParams.set("offset", String(offset));
-    url.searchParams.set("fields", "list_status,node{id,title,main_picture,alternative_titles}");
-    url.searchParams.set("nsfw", "true");
-    const json = (await fetchJson(url.toString(), {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    })) as { data?: Array<Record<string, unknown>>; paging?: { next?: string } };
-    const page = json.data ?? [];
-    out.push(...page);
-    if (!json.paging?.next || page.length === 0) {
-      break;
-    }
-    offset += 100;
-  }
-  return out;
-}
-
 async function mapMalPage(accessToken: string, offset: number, limit = IMPORT_PAGE_SIZE) {
   const url = new URL(`${MAL_API}/users/@me/animelist`);
   url.searchParams.set("limit", String(limit));

@@ -14,7 +14,6 @@ export function scrollMainToTop(): void {
   const container = getMainScrollContainer();
   if (container) {
     container.scrollTop = 0;
-    return;
   }
   window.scrollTo({ top: 0 });
 }
@@ -24,16 +23,16 @@ export function scrollMainToTop(): void {
  * Ne pas utiliser la heuristique « scrollable » : tant que le nœud existe, scrollTop est la source de vérité.
  */
 export function readMainScrollTop(container: HTMLElement | null): number {
-  if (container) {
+  if (container && (container.scrollHeight > container.clientHeight || container.scrollTop > 0)) {
     return container.scrollTop;
   }
   return window.scrollY;
 }
 
 export function writeMainScrollTop(container: HTMLElement | null, y: number): void {
-  if (container) {
+  if (container && (container.scrollHeight > container.clientHeight || container.scrollTop > 0)) {
     container.scrollTop = y;
-    return;
+  } else {
+    window.scrollTo({ top: y });
   }
-  window.scrollTo({ top: y });
 }

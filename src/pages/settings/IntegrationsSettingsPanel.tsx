@@ -75,6 +75,7 @@ export function IntegrationsSettingsPanel() {
     void loadAllStatuses();
   }, [loadAllStatuses]);
 
+
   useEffect(() => {
     const url = new URL(window.location.href);
     const oauthResult = url.searchParams.get("integration_oauth");
@@ -182,33 +183,6 @@ export function IntegrationsSettingsPanel() {
     []
   );
 
-  const tampermonkeyGuideUrl = useMemo(
-    () => new URL("/tampermonkey/INSTALLATION.html", window.location.origin).toString(),
-    []
-  );
-  const tampermonkeyScriptUrl = useMemo(
-    () =>
-      new URL(
-        "/tampermonkey/Nautiljon%20Extractor.user.js",
-        window.location.origin
-      ).toString(),
-    []
-  );
-
-  const openTampermonkeyGuide = useCallback(async () => {
-    const openedExternally = await openExternalUrl(tampermonkeyGuideUrl);
-    if (!openedExternally) {
-      window.open(tampermonkeyGuideUrl, "_blank", "noopener,noreferrer");
-    }
-  }, [tampermonkeyGuideUrl]);
-
-  const openTampermonkeyScript = useCallback(async () => {
-    const openedExternally = await openExternalUrl(tampermonkeyScriptUrl);
-    if (!openedExternally) {
-      window.open(tampermonkeyScriptUrl, "_blank", "noopener,noreferrer");
-    }
-  }, [tampermonkeyScriptUrl]);
-
   return (
     <div className="integrations-settings">
       {globalInfo ? <p className="settings-success">{globalInfo}</p> : null}
@@ -275,34 +249,6 @@ export function IntegrationsSettingsPanel() {
           </section>
         );
       })}
-      <section
-        className="settings-block integrations-settings-block"
-        aria-labelledby="integrations-tampermonkey"
-      >
-        <h2 id="integrations-tampermonkey" className="settings-block-title">
-          Tampermonkey (Nautiljon)
-        </h2>
-        <p className="settings-block-lead">
-          Installe le script Nautiljon directement depuis l’application pour enrichir les fiches
-          lectures (VF prioritaire).
-        </p>
-        <div className="integrations-actions integrations-tampermonkey-actions">
-          <button
-            type="button"
-            className="integrations-connect-btn"
-            onClick={() => void openTampermonkeyGuide()}
-          >
-            Ouvrir le guide
-          </button>
-          <button
-            type="button"
-            className="family-settings-btn-secondary"
-            onClick={() => void openTampermonkeyScript()}
-          >
-            Télécharger / Installer le script
-          </button>
-        </div>
-      </section>
     </div>
   );
 }

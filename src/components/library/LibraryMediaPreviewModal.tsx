@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/common/Modal";
 
 type LibraryMediaPreviewModalProps = {
@@ -24,19 +24,19 @@ export function LibraryMediaPreviewModal({
     setIndex(safe);
   }, [open, startIndex, images.length]);
 
-  function showPrev() {
+  const showPrev = useCallback(() => {
     if (images.length <= 1) {
       return;
     }
     setIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
-  }
+  }, [images.length]);
 
-  function showNext() {
+  const showNext = useCallback(() => {
     if (images.length <= 1) {
       return;
     }
     setIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
-  }
+  }, [images.length]);
 
   useEffect(() => {
     if (!open) {
@@ -57,7 +57,7 @@ export function LibraryMediaPreviewModal({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, images.length]);
+  }, [open, onClose, showNext, showPrev]);
 
   const current = images[index] ?? "";
 

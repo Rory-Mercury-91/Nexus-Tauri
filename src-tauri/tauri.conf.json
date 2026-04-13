@@ -52,6 +52,11 @@
         "https://github.com/Rory-Mercury-91/Nexus-Tauri/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2MjY0Nzk2Qjk5N0NBQkIKUldTN3lwZTVsa2NtNXNQL244eldGNTFCR3E0cWUvanp1N3BCNkh6SmNZK1RSNzI2cG85ZnVXY2EK"
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["nexus"]
+      }
     }
   }
 }

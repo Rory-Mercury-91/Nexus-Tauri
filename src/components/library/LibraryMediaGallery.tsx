@@ -6,6 +6,7 @@ type LibraryMediaGalleryProps = {
   emptyMessage: string;
   title?: string;
   thumbClassName?: string;
+  onDownloadImage?: (src: string, index: number) => void;
 };
 
 export function LibraryMediaGallery({
@@ -13,6 +14,7 @@ export function LibraryMediaGallery({
   emptyMessage,
   title = "Galeries disponibles",
   thumbClassName,
+  onDownloadImage,
 }: LibraryMediaGalleryProps) {
   const galleryRef = useRef<HTMLDivElement | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
@@ -56,9 +58,21 @@ export function LibraryMediaGallery({
         {images.length > 0 ? (
           <div ref={galleryRef} className="anime-detail-gallery-carousel">
             {images.map((src, i) => (
-              <button key={`${src}-${i}`} type="button" className="anime-detail-image-btn" onClick={() => openPreview(i)}>
-                <img src={src} alt="" className={thumbClassName} loading="lazy" />
-              </button>
+              <div key={`${src}-${i}`} className="library-downloadable-image">
+                <button type="button" className="anime-detail-image-btn" onClick={() => openPreview(i)}>
+                  <img src={src} alt="" className={thumbClassName} loading="lazy" />
+                </button>
+                {onDownloadImage ? (
+                  <button
+                    type="button"
+                    className="library-download-image-btn"
+                    onClick={() => onDownloadImage(src, i)}
+                    title="Télécharger l'image"
+                  >
+                    💾
+                  </button>
+                ) : null}
+              </div>
             ))}
           </div>
         ) : (

@@ -36,6 +36,7 @@ export type SyncStatusPayload = {
 
 export type SyncStartOptions = {
   selectedFieldIds?: string[];
+  targetMalId?: number;
 };
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -200,7 +201,15 @@ export async function startAnimeSync(
   const data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
     supabase,
     "sync-start",
-    { source, media_type: "anime", selected_field_ids: selected }
+    {
+      source,
+      media_type: "anime",
+      selected_field_ids: selected,
+      target_mal_id:
+        Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
+          ? Math.floor(Number(options?.targetMalId))
+          : null,
+    }
   );
   if (!data?.ok || !data.run_id) {
     throw new Error("Impossible de démarrer la synchronisation.");
@@ -219,7 +228,15 @@ export async function startReadingSync(
   const data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
     supabase,
     "sync-start",
-    { source, media_type: "reading", selected_field_ids: selected }
+    {
+      source,
+      media_type: "reading",
+      selected_field_ids: selected,
+      target_mal_id:
+        Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
+          ? Math.floor(Number(options?.targetMalId))
+          : null,
+    }
   );
   if (!data?.ok || !data.run_id) {
     throw new Error("Impossible de démarrer la synchronisation lectures.");

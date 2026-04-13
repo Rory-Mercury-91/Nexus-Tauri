@@ -224,7 +224,7 @@ export async function loadLibraryProgressSnapshot(
   // Récupérer les volumes pour toutes les lectures de l'utilisateur
   // Diviser en lots pour éviter les URLs trop longues
   const readingIds = readingRows.map((row) => String(row.id ?? "")).filter(Boolean);
-  let volumeRows: Array<Record<string, unknown>> = [];
+  const volumeRows: Array<Record<string, unknown>> = [];
   if (readingIds.length > 0) {
     const BATCH_SIZE = 50; // Limiter à 50 IDs par requête
     for (let i = 0; i < readingIds.length; i += BATCH_SIZE) {
@@ -416,9 +416,14 @@ async function calculateReadingVolumesCosts(
 
   const costsByOwner = new Map<string, { volumeCount: number; totalCost: number }>();
 
-  (volumeOwnersData ?? []).forEach((owner: any) => {
-    const userId = owner.user_id as string;
-    const shareEuros = Number(owner.share_euros ?? 0);
+  type ReadingVolumeOwnerRow = {
+    user_id: string;
+    share_euros: number | string | null;
+  };
+  (volumeOwnersData ?? []).forEach((owner) => {
+    const typedOwner = owner as ReadingVolumeOwnerRow;
+    const userId = typedOwner.user_id;
+    const shareEuros = Number(typedOwner.share_euros ?? 0);
     
     if (!costsByOwner.has(userId)) {
       costsByOwner.set(userId, { volumeCount: 0, totalCost: 0 });

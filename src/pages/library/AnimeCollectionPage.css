@@ -183,7 +183,23 @@
 }
 
 .anime-collection-filter-field-toggle {
-  align-content: start;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.anime-collection-filter-field-toggle > span {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.anime-collection-filter-field-toggle .nexus-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .anime-collection-page select {
@@ -424,8 +440,32 @@
 
 .anime-collection-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.4rem;
+  justify-content: space-between;
+}
+
+.anime-collection-owners-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: 55%;
+}
+
+.anime-collection-owner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.12rem 0.36rem 0.12rem 0.16rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  background: color-mix(in srgb, var(--surface-light) 72%, var(--surface));
+  font-size: 0.7rem;
+  color: var(--text);
+  white-space: nowrap;
 }
 
 .anime-collection-title-favorite {
@@ -679,6 +719,15 @@
 
   .anime-collection-filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .anime-collection-filter-field-toggle {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .anime-collection-owners-inline {
+    max-width: 100%;
   }
 
   .anime-collection-filters-head {

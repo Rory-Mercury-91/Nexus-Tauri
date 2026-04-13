@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { Modal } from "@/components/common/Modal";
-import type { SyncDiffField } from "@/services/library/syncDiffService";
 import type { ResyncQueueEntry } from "@/services/library/resyncQueueService";
 import "./ResyncQueueModal.css";
 

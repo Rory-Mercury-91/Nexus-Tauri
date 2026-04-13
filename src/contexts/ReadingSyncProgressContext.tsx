@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
 import {
   getReadingSyncStatus,
   type SyncStartOptions,
@@ -21,6 +22,12 @@ type ReadingSyncProgressContextType = {
 };
 
 const ReadingSyncProgressContext = createContext<ReadingSyncProgressContextType | undefined>(undefined);
+const AUTO_SYNC_MAL_KEY = "sync:auto:last-run:reading:mal";
+const AUTO_SYNC_ANILIST_KEY = "sync:auto:last-run:reading:anilist";
+const AUTO_NAUTILJON_KEY = "nautiljon:auto:last-run:reading";
+const AUTO_SYNC_INTERVAL_MS = 60 * 60 * 1000;
+const AUTO_SYNC_CHECK_MS = 60 * 1000;
+const AUTO_NAUTILJON_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function ReadingSyncProgressProvider({ children }: { children: ReactNode }) {
   const [activeRun, setActiveRun] = useState<SyncRun | null>(null);
@@ -98,6 +105,59 @@ export function ReadingSyncProgressProvider({ children }: { children: ReactNode 
     };
   }, [activeRun, load]);
 
+  useEffect(() => {
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight) {
+        return;
+      }
+      if (activeRun && (activeRun.status === "queued" || activeRun.status === "running")) {
+        return;
+      }
+      const now = Date.now();
+      const dueSources: SyncSource[] = [];
+      const malMs = Number(localStorage.getItem(AUTO_SYNC_MAL_KEY) ?? 0);
+      const anilistMs = Number(localStorage.getItem(AUTO_SYNC_ANILIST_KEY) ?? 0);
+      if (!Number.isFinite(malMs) || now - malMs >= AUTO_SYNC_INTERVAL_MS) {
+        dueSources.push("mal");
+      }
+      if (!Number.isFinite(anilistMs) || now - anilistMs >= AUTO_SYNC_INTERVAL_MS) {
+        dueSources.push("anilist");
+      }
+      if (dueSources.length === 0) {
+        // Continue pour le contrôle Nautiljon hebdomadaire.
+      }
+      inFlight = true;
+      try {
+        for (const source of dueSources) {
+          try {
+            await startSync(source);
+            const key = source === "mal" ? AUTO_SYNC_MAL_KEY : AUTO_SYNC_ANILIST_KEY;
+            localStorage.setItem(key, String(Date.now()));
+          } catch {
+            // Ignore silencieusement (intégration potentiellement non configurée).
+          }
+        }
+        const nautiljonLastMs = Number(localStorage.getItem(AUTO_NAUTILJON_KEY) ?? 0);
+        if (!Number.isFinite(nautiljonLastMs) || now - nautiljonLastMs >= AUTO_NAUTILJON_INTERVAL_MS) {
+          try {
+            await runNautiljonRefresh({ limit: 100 });
+            localStorage.setItem(AUTO_NAUTILJON_KEY, String(Date.now()));
+          } catch {
+            // Ignore si la fonction n'est pas accessible.
+          }
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const id = window.setInterval(() => {
+      void tick();
+    }, AUTO_SYNC_CHECK_MS);
+    void tick();
+    return () => window.clearInterval(id);
+  }, [activeRun, startSync]);
+
   const value = useMemo<ReadingSyncProgressContextType>(
     () => ({ activeRun, stages, recentRuns, loading, error, startSync, refresh }),
     [activeRun, stages, recentRuns, loading, error, startSync, refresh]
@@ -106,6 +166,7 @@ export function ReadingSyncProgressProvider({ children }: { children: ReactNode 
   return <ReadingSyncProgressContext.Provider value={value}>{children}</ReadingSyncProgressContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useReadingSyncProgress() {
   const ctx = useContext(ReadingSyncProgressContext);
   if (!ctx) {

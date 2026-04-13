@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { ImageOff } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Modal } from "@/components/common/Modal";
 import { OwnerToggleList } from "@/components/common/OwnerToggleList";
 import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
@@ -17,16 +17,18 @@ import { LibrarySyncDiffModal } from "@/components/modals/LibrarySyncDiffModal/L
 import { LibraryEditEntryModal, type LibraryEditField } from "@/components/modals/LibraryEditEntryModal/LibraryEditEntryModal";
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { notifyToast } from "@/lib/toastEvents";
+import { downloadImageToDownloads } from "@/lib/imageDownload";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { LibraryDetailStickyHeader } from "@/pages/library/LibraryDetailStickyHeader";
 import { listFamilyMembersWithRole, listMyFamilies, type FamilyMemberWithRole } from "@/services/family/familyService";
 import { fetchReadingFull, fetchReadingPictures } from "@/services/jikan/readingJikanService";
 import { fetchReadingVolumes, upsertReadingVolume, type ReadingVolumeRow } from "@/services/library/readingVolumeService";
+import { deleteReadingEntry } from "@/services/library/readingCollectionService";
 import { buildReadingSyncDiffFields } from "@/services/library/syncDiffService";
 import { translateLibraryTerm, translateLibraryTerms } from "@/services/library/termTranslations";
 import { scrollMainToTop } from "@/lib/collectionScroll";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
-import { formatDateFr, formatPeriodeFr } from "@/lib/dateUtils";
+import { formatPeriodeFr } from "@/lib/dateUtils";
 import "./LibraryPages.css";
 import "./AnimeDetailPage/AnimeDetailPage.css";
 import "./ReadingDetailPage.css";
@@ -173,6 +175,22 @@ function mapReadStatusToDb(raw: string): string {
 
 export function ReadingDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const detailState = (location.state as {
+    fromCollection?: "lectures";
+    collectionScrollY?: number;
+    collectionViewMode?: "grid" | "list";
+  } | null) ?? null;
+  const backState =
+    detailState?.fromCollection === "lectures" &&
+    Number.isFinite(detailState.collectionScrollY ?? NaN)
+      ? {
+          fromDetailCollection: "lectures" as const,
+          restoreScrollY: Number(detailState.collectionScrollY),
+          collectionViewMode: detailState.collectionViewMode,
+        }
+      : undefined;
   const malId = useMemo(() => {
     const n = Number(id);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -212,6 +230,7 @@ export function ReadingDetailPage() {
   const [editSaving, setEditSaving] = useState(false);
   const [translatingSynopsis, setTranslatingSynopsis] = useState(false);
   const [syncLaunching, setSyncLaunching] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { startSync: startReadingSync, activeRun: activeReadingRun } = useReadingSyncProgress();
   const [selectedDiffFieldIds, setSelectedDiffFieldIds] = useState<string[]>([]);
   const [galleryImages, setGalleryImages] = useState<string[]>([]);
@@ -423,8 +442,8 @@ export function ReadingDetailPage() {
         .toLowerCase()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
-        .replace(/^[\s"'`«»\[\]【】(){}<>]+|[\s"'`«»\[\]【】(){}<>]+$/g, "")
-        .replace(/[\[\]【】"'`«»]/g, "")
+        .replace(/^[\s"'`«»[\]【】(){}<>]+|[\s"'`«»[\]【】(){}<>]+$/g, "")
+        .replace(/[[\]【】"'`«»]/g, "")
         .replace(/\s+/g, " ")
         .trim();
     }
@@ -453,7 +472,7 @@ export function ReadingDetailPage() {
         .toLowerCase()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[\[\]【】"'`«»]/g, "")
+        .replace(/[[\]【】"'`«»]/g, "")
         .replace(/\s+/g, " ")
         .trim();
     }
@@ -483,11 +502,7 @@ export function ReadingDetailPage() {
     }
     return { genres, themes, demographics };
   }, [readingView.demographics, readingView.genres, readingView.themes]);
-  const primaryGenreChip = dedupedBadges.genres[0] ?? null;
-  const secondaryGenreBadges = primaryGenreChip
-    ? dedupedBadges.genres.slice(1)
-    : dedupedBadges.genres;
-  
+
   // Déterminer la couleur du badge de statut selon sa valeur
   const getWorkStatusColor = (status: string): string => {
     const normalized = status.toLowerCase();
@@ -554,6 +569,7 @@ export function ReadingDetailPage() {
     const manualOverrides = getManualOverrides(rawMalSnapshot);
     const manualLinks = ((manualOverrides.links as Record<string, unknown> | undefined) ?? {});
     setEditDraft({
+      malId: String((rawDbRow?.mal_manga_id as number | undefined) ?? malId ?? ""),
       titleFr: String(manualOverrides.title_fr ?? ""),
       titleJapanese: readingView.titleJapanese,
       titleEnglish: readingView.titleEnglish,
@@ -587,15 +603,29 @@ export function ReadingDetailPage() {
       readStatus: userReadStatus,
       isFavorite: userFavorite,
     });
-  }, [rawDbRow, readingView, userReadStatus, userFavorite]);
+  }, [malId, rawDbRow, readingView, userReadStatus, userFavorite]);
 
   const editFields: LibraryEditField[] = [
     { key: "titleFr", label: "Titre VF", group: "Titres", type: "text", value: editDraft.titleFr ?? "" },
     { key: "titleEnglish", label: "Titre romanisé", group: "Titres", type: "text", value: editDraft.titleEnglish ?? "" },
     { key: "titleOriginal", label: "Titre original (japonais)", group: "Titres", type: "text", value: editDraft.titleOriginal ?? "" },
     { key: "titleSynonyms", label: "Titres alternatifs (séparateur |)", group: "Titres", type: "text", value: editDraft.titleSynonyms ?? "", span2: true },
+    { key: "malId", label: "MAL ID (liaison)", group: "Titres", type: "text", value: editDraft.malId ?? "" },
     { key: "mediaType", label: "Type", group: "Métadonnées", type: "text", value: editDraft.mediaType ?? "" },
-    { key: "workStatus", label: "Statut oeuvre", group: "Métadonnées", type: "text", value: editDraft.workStatus ?? "" },
+    {
+      key: "workStatus",
+      label: "Statut oeuvre",
+      group: "Métadonnées",
+      type: "select",
+      value: String(editDraft.workStatus ?? ""),
+      options: [
+        { value: "Publishing", label: "Publishing" },
+        { value: "Finished", label: "Finished" },
+        { value: "On Hiatus", label: "On Hiatus" },
+        { value: "Discontinued", label: "Discontinued" },
+        { value: "Not yet published", label: "Not yet published" },
+      ],
+    },
     { key: "score", label: "Score", group: "Métadonnées", type: "number", value: Number(editDraft.score ?? 0), min: 0, step: 0.01 },
     {
       key: "readStatus",
@@ -818,7 +848,14 @@ export function ReadingDetailPage() {
           .eq("id", readingRowId);
         setRawDbRow((prev) => (prev ? { ...prev, mal_official_snapshot: nextMalSnapshot } : prev));
       }
-      await startReadingSync(source, { selectedFieldIds: selectedDiffFieldIds });
+      const targetMalId = Number(String(editDraft.malId ?? "").trim());
+      await startReadingSync(source, {
+        selectedFieldIds: selectedDiffFieldIds,
+        targetMalId:
+          Number.isFinite(targetMalId) && targetMalId > 0
+            ? targetMalId
+            : Number((rawDbRow as { mal_manga_id?: unknown } | null)?.mal_manga_id ?? malId ?? 0),
+      });
       setIsSyncModalOpen(false);
       window.location.reload();
     } finally {
@@ -1077,7 +1114,9 @@ export function ReadingDetailPage() {
     (async () => {
       try {
         await loadReadingLivePayload();
-      } catch {}
+      } catch {
+        // Ignore silencieusement : indisponibilité réseau temporaire.
+      }
     })();
   }, [loadReadingLivePayload]);
 
@@ -1273,8 +1312,14 @@ export function ReadingDetailPage() {
       const baseJikanSnapshot = ((rawDbRow as { jikan_snapshot?: unknown }).jikan_snapshot ?? {}) as Record<string, unknown>;
       const baseMalSnapshot = ((rawDbRow as { mal_official_snapshot?: unknown }).mal_official_snapshot ?? {}) as Record<string, unknown>;
       const full = ((baseJikanSnapshot.full ?? rawLiveJikan?.data ?? rawLiveJikan ?? {}) as Record<string, unknown>);
+      const parsedMalId = Number(String(editDraft.malId ?? "").trim());
+      const nextMalId =
+        Number.isFinite(parsedMalId) && parsedMalId > 0
+          ? Math.floor(parsedMalId)
+          : Number((rawDbRow as { mal_manga_id?: unknown }).mal_manga_id ?? malId ?? 0);
       const nextFull = {
         ...full,
+        mal_id: nextMalId,
         title: String(full.title ?? ""),
         title_japanese: String(editDraft.titleJapanese ?? ""),
         title_english: String(editDraft.titleEnglish ?? ""),
@@ -1350,6 +1395,7 @@ export function ReadingDetailPage() {
       const { error } = await supabase
         .from("library_reading")
         .update({
+          mal_manga_id: nextMalId,
           title: String((rawDbRow as { title?: unknown } | null)?.title ?? full.title ?? ""),
           read_status: mapReadStatusToDb(String(editDraft.readStatus ?? "Planifié")),
           main_picture_url: String(editDraft.imageUrl ?? ""),
@@ -1364,7 +1410,11 @@ export function ReadingDetailPage() {
       setUserFavorite(Boolean(editDraft.isFavorite ?? false));
       notifyToast({ kind: "success", message: "Fiche lecture enregistrée en base." });
       setIsEditModalOpen(false);
-      window.location.reload();
+      if (nextMalId !== Number((rawDbRow as { mal_manga_id?: unknown }).mal_manga_id ?? malId ?? 0)) {
+        navigate(`/lectures/${nextMalId}`, { state: backState });
+      } else {
+        window.location.reload();
+      }
     } catch (error) {
       notifyToast({
         kind: "error",
@@ -1413,14 +1463,82 @@ export function ReadingDetailPage() {
     }
   }
 
+  async function deleteCurrentReadingEntry() {
+    if (!readingRowId || deleting) {
+      return;
+    }
+    const confirmed = window.confirm("Supprimer cette fiche lecture locale ?");
+    if (!confirmed) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const supabase = getSupabaseClient();
+      await deleteReadingEntry(supabase, readingRowId);
+      notifyToast({ kind: "success", message: "Fiche supprimée." });
+      navigate("/lectures", { state: backState });
+    } catch (error) {
+      notifyToast({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Suppression impossible.",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function downloadCoverImage() {
+    if (!readingView.imageUrl) {
+      notifyToast({ kind: "info", message: "Aucune image à télécharger." });
+      return;
+    }
+    const result = await downloadImageToDownloads(
+      readingView.imageUrl,
+      `${(readingView.title || "lecture").trim()}-cover`
+    );
+    if (result.ok) {
+      notifyToast({ kind: "success", message: `Image téléchargée: ${result.path}` });
+      return;
+    }
+    notifyToast({ kind: "error", message: result.error });
+  }
+
+  async function downloadGalleryImage(src: string, index: number) {
+    const result = await downloadImageToDownloads(
+      src,
+      `${(readingView.title || "lecture").trim()}-galerie-${index + 1}`
+    );
+    if (result.ok) {
+      notifyToast({ kind: "success", message: `Image téléchargée: ${result.path}` });
+      return;
+    }
+    notifyToast({ kind: "error", message: result.error });
+  }
+
+  async function downloadVolumeImage(imageUrl: string, volumeNumber: number) {
+    const result = await downloadImageToDownloads(
+      imageUrl,
+      `${(readingView.title || "lecture").trim()}-tome-${volumeNumber}`
+    );
+    if (result.ok) {
+      notifyToast({ kind: "success", message: `Image téléchargée: ${result.path}` });
+      return;
+    }
+    notifyToast({ kind: "error", message: result.error });
+  }
+
+
   return (
     <div className="library-page anime-detail-page reading-detail-page">
       <LibraryDetailStickyHeader
         backTo="/lectures"
         backLabel="← Retour à la collection lectures"
+        backState={backState}
         onSync={() => void openSyncDiffModal()}
         onEdit={() => setIsEditModalOpen(true)}
         onRefresh={() => window.location.reload()}
+        onDelete={() => void deleteCurrentReadingEntry()}
+        deleting={deleting}
       />
       <LibraryEditEntryModal
         open={isEditModalOpen}
@@ -1431,6 +1549,13 @@ export function ReadingDetailPage() {
         onTranslate={() => void translateReadingSynopsisToFrench()}
         translateDisabled={translatingSynopsis}
         onChange={(key, value) => setEditDraft((prev) => ({ ...prev, [key]: value }))}
+        helpTitle="Aide au remplissage"
+        helpLines={[
+          "Statut oeuvre doit rester dans les valeurs MAL officielles.",
+          "Liens: utiliser des URLs complètes (https://...).",
+          "Synopsis source = texte brut d'origine ; Synopsis FR = adaptation/traduction.",
+          "Champs numériques attendent une valeur entière positive ou 0.",
+        ]}
         onClose={() => setIsEditModalOpen(false)}
         onSave={() => void saveEditedReadingEntry()}
       />
@@ -1442,13 +1567,23 @@ export function ReadingDetailPage() {
       <section className="anime-detail-section reading-overview-layout">
         <aside className="reading-overview-left">
           {readingView.imageUrl ? (
-            <img
-              className="anime-detail-poster anime-detail-poster-legacy"
-              src={proxyNautiljonImage(readingView.imageUrl)}
-              alt=""
-              width={260}
-              height={390}
-            />
+            <div className="library-downloadable-image is-main-cover">
+              <img
+                className="anime-detail-poster anime-detail-poster-legacy"
+                src={proxyNautiljonImage(readingView.imageUrl)}
+                alt=""
+                width={260}
+                height={390}
+              />
+              <button
+                type="button"
+                className="library-download-image-btn"
+                onClick={() => void downloadCoverImage()}
+                title="Télécharger l'image"
+              >
+                💾
+              </button>
+            </div>
           ) : (
             <div className="anime-detail-poster anime-detail-poster-legacy anime-detail-relation-thumb-placeholder" aria-hidden>
               <ImageOff size={36} />
@@ -1571,6 +1706,7 @@ export function ReadingDetailPage() {
             images={galleryImages}
             emptyMessage="Galerie indisponible pour cette oeuvre."
             thumbClassName="anime-detail-gallery-thumb"
+            onDownloadImage={(src, index) => void downloadGalleryImage(src, index)}
           />
         </div>
       </section>
@@ -1681,16 +1817,26 @@ export function ReadingDetailPage() {
                   const proxiedUrl = proxyNautiljonImage(volumeImageUrl);
                   
                   return proxiedUrl ? (
-                    <img
-                      src={proxiedUrl}
-                      alt=""
-                      width={105}
-                      height={145}
-                      onError={(e) => {
-                        console.error(`❌ Erreur chargement image Vol. ${volumeNumber}:`, volumeImageUrl);
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
+                    <div className="library-downloadable-image">
+                      <img
+                        src={proxiedUrl}
+                        alt=""
+                        width={105}
+                        height={145}
+                        onError={(e) => {
+                          console.error(`❌ Erreur chargement image Vol. ${volumeNumber}:`, volumeImageUrl);
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="library-download-image-btn"
+                        onClick={() => void downloadVolumeImage(volumeImageUrl, volumeNumber)}
+                        title="Télécharger l'image du tome"
+                      >
+                        💾
+                      </button>
+                    </div>
                   ) : (
                     <div className="anime-detail-relation-thumb-placeholder" aria-hidden style={{ width: 105, height: 145 }}>
                       <ImageOff size={20} />

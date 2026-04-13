@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Modal } from "@/components/common/Modal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import "./LibraryEditEntryModal.css";
@@ -32,6 +33,8 @@ type LibraryEditEntryModalProps = {
   translateLabel?: string;
   onTranslate?: () => void;
   translateDisabled?: boolean;
+  helpTitle?: string;
+  helpLines?: string[];
   onChange: (key: string, value: string | number | boolean) => void;
   onClose: () => void;
   onSave: () => void;
@@ -46,10 +49,13 @@ export function LibraryEditEntryModal({
   translateLabel = "Traduire",
   onTranslate,
   translateDisabled = false,
+  helpTitle = "Aide",
+  helpLines,
   onChange,
   onClose,
   onSave,
 }: LibraryEditEntryModalProps) {
+  const [helpOpen, setHelpOpen] = useState(false);
   const groupedFields = fields.reduce<Array<{ title: string; fields: LibraryEditField[] }>>((acc, field) => {
     const title = (field.group ?? "Général").trim() || "Général";
     const existing = acc.find((item) => item.title === title);
@@ -68,6 +74,19 @@ export function LibraryEditEntryModal({
       title={title}
       maxWidth="min(96vw, 56rem)"
     >
+      {helpLines && helpLines.length > 0 ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          <button
+            type="button"
+            className="anime-detail-action-btn"
+            onClick={() => setHelpOpen(true)}
+            disabled={saving}
+            title="Aide au remplissage"
+          >
+            ?
+          </button>
+        </div>
+      ) : null}
       <div className="library-edit-modal-sections">
         {groupedFields.map((group) => (
           <section key={group.title} className="library-edit-modal-section">
@@ -158,6 +177,18 @@ export function LibraryEditEntryModal({
           {saving ? "Enregistrement..." : saveLabel}
         </button>
       </div>
+      <Modal
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        title={helpTitle}
+        maxWidth="min(96vw, 40rem)"
+      >
+        <ul style={{ margin: 0, paddingLeft: "1rem" }}>
+          {(helpLines ?? []).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </Modal>
     </Modal>
   );
 }

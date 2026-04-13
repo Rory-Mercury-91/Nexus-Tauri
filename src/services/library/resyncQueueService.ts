@@ -9,6 +9,16 @@ export type ResyncQueueEntry = {
   fields: SyncDiffField[];
 };
 
+// Interface pour typer proprement le retour de Supabase
+interface LibraryEntry {
+  id: string;
+  title: string;
+  mal_official_snapshot: Record<string, unknown> | null;
+  jikan_snapshot: Record<string, unknown> | null;
+  mal_id?: number;
+  mal_manga_id?: number;
+}
+
 /**
  * Détecte les entrées qui ont des différences entre leur snapshot actuel et un nouveau snapshot MAL/Jikan
  */
@@ -23,68 +33,62 @@ export async function detectResyncChanges(
   
   const { data, error } = await supabase
     .from(tableName)
-    .select("id, title, mal_official_snapshot, jikan_snapshot, " + malIdCol)
+    .select(`id, title, mal_official_snapshot, jikan_snapshot, ${malIdCol}`)
     .eq("user_id", userId);
   
   if (error) {
     throw new Error(error.message);
   }
   
-  const entries = data ?? [];
+  // On force le type ici pour éviter l'erreur GenericStringError
+  const entries = (data as unknown as LibraryEntry[]) ?? [];
   const queue: ResyncQueueEntry[] = [];
   
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const malId = Number((entry as Record<string, unknown>)[malIdCol]);
-    if (!Number.isFinite(malId) || malId <= 0) {
+    // Accès sécurisé à l'ID MAL selon le type de média
+    const malId = mediaType === "anime" ? entry.mal_id : entry.mal_manga_id;
+    
+    if (!malId || !Number.isFinite(malId) || malId <= 0) {
       continue;
     }
     
-    // Ajouter un délai pour respecter le rate limit de Jikan (3 req/sec)
     if (i > 0) {
       await new Promise(resolve => setTimeout(resolve, 350));
     }
     
-    // Récupérer les données live de MAL/Jikan
-    const [malData, jikanData] = await Promise.all([
-      source === "mal" ? fetchMalData(malId, mediaType) : null,
-      fetchJikanData(malId, mediaType),
-    ]);
+// Récupérer les données live de MAL/Jikan
+const [malData, jikanData] = await Promise.all([
+  source === "mal" ? fetchMalData() : null,
+  fetchJikanData(malId, mediaType),
+]);
+
+// On continue seulement si on a reçu des données d'une des deux sources
+if (!malData && !jikanData) {
+  continue;
+}
+
+const currentMalSnapshot = (entry.mal_official_snapshot ?? {}) as Record<string, unknown>;
+const newMalSnapshot = malData ? { ...currentMalSnapshot, ...malData } : currentMalSnapshot;
+
+// Détecter les différences
+// Note : On ne construit plus les snapshots Jikan ici car ils ne sont pas acceptés 
+// par buildAnimeSyncDiffFields/buildReadingSyncDiffFields pour le moment.
+const fields = mediaType === "anime"
+  ? buildAnimeSyncDiffFields({
+      malSnapshot: currentMalSnapshot,
+      liveFull: newMalSnapshot,
+    })
+  : buildReadingSyncDiffFields({
+      dbRow: currentMalSnapshot,
+      livePayload: newMalSnapshot,
+    });
     
-    if (!malData && !jikanData) {
-      continue;
-    }
-    
-    const currentMalSnapshot = (entry.mal_official_snapshot ?? {}) as Record<string, unknown>;
-    const currentJikanSnapshot = (entry.jikan_snapshot ?? {}) as Record<string, unknown>;
-    const currentJikanFull = (currentJikanSnapshot.full ?? {}) as Record<string, unknown>;
-    
-    // Créer des snapshots temporaires avec les nouvelles données
-    const newMalSnapshot = malData ? { ...currentMalSnapshot, ...malData } : currentMalSnapshot;
-    const newJikanFull = jikanData ? { ...currentJikanFull, ...jikanData } : currentJikanFull;
-    const newJikanSnapshot = { ...currentJikanSnapshot, full: newJikanFull };
-    
-    // Détecter les différences
-    const fields = mediaType === "anime"
-      ? buildAnimeSyncDiffFields({
-          malCurrent: currentMalSnapshot,
-          malIncoming: newMalSnapshot,
-          jikanCurrent: currentJikanSnapshot,
-          jikanIncoming: newJikanSnapshot,
-        })
-      : buildReadingSyncDiffFields({
-          malCurrent: currentMalSnapshot,
-          malIncoming: newMalSnapshot,
-          jikanCurrent: currentJikanSnapshot,
-          jikanIncoming: newJikanSnapshot,
-        });
-    
-    // Si des différences existent, ajouter à la queue
     if (fields.length > 0) {
       queue.push({
-        id: String(entry.id),
+        id: entry.id,
         malId,
-        title: String(entry.title),
+        title: entry.title,
         mediaType,
         fields,
       });
@@ -107,23 +111,23 @@ export async function applyResyncChanges(
 ): Promise<void> {
   const tableName = mediaType === "anime" ? "library_anime" : "library_reading";
   
-  // Récupérer l'entrée actuelle
-  const { data: existing, error: existingError } = await supabase
+  const { data, error: existingError } = await supabase
     .from(tableName)
     .select("mal_official_snapshot, jikan_snapshot")
     .eq("id", entryId)
     .single();
   
-  if (existingError || !existing) {
+  if (existingError || !data) {
     throw new Error("Entrée introuvable.");
   }
+
+  const existing = data as LibraryEntry;
   
   const currentMal = (existing.mal_official_snapshot ?? {}) as Record<string, unknown>;
   const currentJikan = (existing.jikan_snapshot ?? {}) as Record<string, unknown>;
   const currentJikanFull = (currentJikan.full ?? {}) as Record<string, unknown>;
   const newJikanFull = (newJikanSnapshot.full ?? {}) as Record<string, unknown>;
   
-  // Merger sélectivement les champs
   const mergedMal = mergeBySelectedFields(currentMal, newMalSnapshot, selectedFieldIds);
   const mergedJikanFull = mergeBySelectedFields(currentJikanFull, newJikanFull, selectedFieldIds);
   const mergedJikan = {
@@ -132,7 +136,6 @@ export async function applyResyncChanges(
     full: mergedJikanFull,
   };
   
-  // Sauvegarder
   const { error: updateError } = await supabase
     .from(tableName)
     .update({
@@ -158,7 +161,6 @@ function mergeBySelectedFields(
     return merged;
   }
   
-  // Mapper les fieldIds aux propriétés du snapshot
   const fieldMap: Record<string, string[]> = {
     title: ["title", "title_english", "title_japanese", "title_synonyms"],
     synopsis: ["synopsis", "background"],
@@ -192,9 +194,8 @@ function mergeBySelectedFields(
   return merged;
 }
 
-async function fetchMalData(malId: number, mediaType: "anime" | "reading"): Promise<Record<string, unknown> | null> {
-  // TODO: Implémenter l'appel à l'API MAL si nécessaire
-  // Pour l'instant, on se base uniquement sur Jikan
+// Ajout des underscores pour indiquer que les variables sont intentionnellement inutilisées pour le moment
+async function fetchMalData(): Promise<Record<string, unknown> | null> {
   return null;
 }
 

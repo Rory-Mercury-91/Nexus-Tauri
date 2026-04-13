@@ -1,9 +1,10 @@
-import { useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useAnimeDetailFromDb, type FranchiseDetailEntry } from "@/hooks/useAnimeDetailFromDb";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { buildAnimeDetailResolvedFields } from "@/services/library/animeDetailViewModel";
 import { updateAnimeWatchStatus } from "@/services/library/animeCollectionService";
+import { deleteAnimeEntry } from "@/services/library/animeCollectionService";
 import { translateLibraryTerm } from "@/services/library/termTranslations";
 import { type SyncSource } from "@/services/library/syncService";
 import { buildAnimeSyncDiffFields } from "@/services/library/syncDiffService";
@@ -11,6 +12,7 @@ import { fetchAnimeFull } from "@/services/jikan/animeJikanService";
 import type { JikanAnimeFull } from "@/services/jikan/jikanTypes";
 import { useSyncProgress } from "@/contexts/SyncProgressContext";
 import { notifyToast } from "@/lib/toastEvents";
+import { downloadImageToDownloads } from "@/lib/imageDownload";
 import { LibraryMediaGallery } from "@/components/library/LibraryMediaGallery";
 import { LibraryMediaPreviewModal } from "@/components/library/LibraryMediaPreviewModal";
 import { LibraryFranchiseSection } from "@/components/library/LibraryFranchiseSection";
@@ -165,6 +167,22 @@ function getManualOverrides(snapshot: Record<string, unknown> | null): Record<st
 
 export function AnimeDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const detailState = (location.state as {
+    fromCollection?: "anime";
+    collectionScrollY?: number;
+    collectionViewMode?: "grid" | "list";
+  } | null) ?? null;
+  const backState =
+    detailState?.fromCollection === "anime" &&
+    Number.isFinite(detailState.collectionScrollY ?? NaN)
+      ? {
+          fromDetailCollection: "anime" as const,
+          restoreScrollY: Number(detailState.collectionScrollY),
+          collectionViewMode: detailState.collectionViewMode,
+        }
+      : undefined;
   const malId = useMemo(() => {
     const n = Number(id);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -204,6 +222,9 @@ export function AnimeDetailPage() {
 
       {state.status === "ready" ? (
         <AnimeDetailBody
+          backState={backState}
+          onDeleted={() => navigate("/anime", { state: backState })}
+          onNavigateToMalId={(nextMalId) => navigate(`/anime/${nextMalId}`)}
           rowId={state.rowId}
           report={state.report}
           anime={state.report.full}
@@ -218,6 +239,9 @@ export function AnimeDetailPage() {
 }
 
 function AnimeDetailBody({
+  backState,
+  onDeleted,
+  onNavigateToMalId,
   rowId,
   report,
   anime,
@@ -226,7 +250,16 @@ function AnimeDetailBody({
   isFavorite,
   franchiseEntries,
 }: {
+  backState?:
+    | {
+        fromDetailCollection: "anime";
+        restoreScrollY: number;
+        collectionViewMode?: "grid" | "list";
+      }
+    | undefined;
   rowId: string;
+  onDeleted: () => void;
+  onNavigateToMalId: (nextMalId: number) => void;
   report: {
     full: JikanAnimeFull;
     pictures: { ok: boolean; data?: { data: Array<{ jpg: { image_url?: string; large_image_url?: string } }> } };
@@ -337,7 +370,11 @@ function AnimeDetailBody({
           updated_at: new Date().toISOString(),
         })
         .eq("id", rowId);
-      await startAnimeSync(source, { selectedFieldIds: selectedDiffFieldIds });
+      const targetMalId = Number(String(draft.malId ?? "").trim());
+      await startAnimeSync(source, {
+        selectedFieldIds: selectedDiffFieldIds,
+        targetMalId: Number.isFinite(targetMalId) && targetMalId > 0 ? targetMalId : Number(anime.mal_id),
+      });
       setIsSyncModalOpen(false);
       window.location.reload();
     } finally {
@@ -346,6 +383,7 @@ function AnimeDetailBody({
   }
 
   const [draft, setDraft] = useState(() => ({
+    malId: String(anime.mal_id ?? ""),
     titleFr: manualTitleFr,
     titleRomanized: resolved.titleEnglish ?? "",
     titleOriginal: resolved.titleJapanese ?? "",
@@ -373,9 +411,11 @@ function AnimeDetailBody({
   }));
   const [favoriteSaving, setFavoriteSaving] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     setDraft((prev) => ({
       ...prev,
+      malId: String(anime.mal_id ?? ""),
       titleRomanized: resolved.titleEnglish ?? "",
       titleOriginal: resolved.titleJapanese ?? "",
       titleAlternatives: resolved.titleAlternatives.join(" | "),
@@ -402,6 +442,7 @@ function AnimeDetailBody({
       isFavorite,
     }));
   }, [
+    anime.mal_id,
     anime.url,
     anime.trailer.embed_url,
     resolved.duration,
@@ -535,8 +576,20 @@ function AnimeDetailBody({
     { key: "titleRomanized", label: "Titre romanisé", group: "Titres", type: "text", value: draft.titleRomanized },
     { key: "titleOriginal", label: "Titre original", group: "Titres", type: "text", value: draft.titleOriginal },
     { key: "titleAlternatives", label: "Titres alternatifs (séparateur |)", group: "Titres", type: "text", value: draft.titleAlternatives, span2: true },
+    { key: "malId", label: "MAL ID (liaison)", group: "Titres", type: "text", value: draft.malId },
     { key: "mediaType", label: "Type", group: "Métadonnées", type: "text", value: draft.mediaType },
-    { key: "status", label: "Statut oeuvre", group: "Métadonnées", type: "text", value: draft.status },
+    {
+      key: "status",
+      label: "Statut oeuvre",
+      group: "Métadonnées",
+      type: "select",
+      value: draft.status,
+      options: [
+        { value: "Currently Airing", label: "Currently Airing" },
+        { value: "Finished Airing", label: "Finished Airing" },
+        { value: "Not yet aired", label: "Not yet aired" },
+      ],
+    },
     { key: "rating", label: "Classification", group: "Métadonnées", type: "text", value: draft.rating },
     { key: "source", label: "Source", group: "Métadonnées", type: "text", value: draft.source },
     { key: "seasonLabel", label: "Saison", group: "Métadonnées", type: "text", value: draft.seasonLabel },
@@ -571,8 +624,11 @@ function AnimeDetailBody({
     setEditSaving(true);
     try {
       const supabase = getSupabaseClient();
+      const parsedMalId = Number(String(draft.malId ?? "").trim());
+      const nextMalId = Number.isFinite(parsedMalId) && parsedMalId > 0 ? Math.floor(parsedMalId) : Number(anime.mal_id);
       const nextFull = {
         ...(report.full as unknown as Record<string, unknown>),
+        mal_id: nextMalId,
         title: resolved.title,
         title_english: draft.titleRomanized,
         title_japanese: draft.titleOriginal,
@@ -621,6 +677,7 @@ function AnimeDetailBody({
       const { error } = await supabase
         .from("library_anime")
         .update({
+          mal_id: nextMalId,
           title: resolved.title,
           title_english: draft.titleRomanized,
           watch_status: mapWatchStatusToDb(draft.userStatus),
@@ -639,7 +696,11 @@ function AnimeDetailBody({
       }
       notifyToast({ kind: "success", message: "Fiche animé enregistrée en base." });
       setIsEditModalOpen(false);
-      window.location.reload();
+      if (nextMalId !== Number(anime.mal_id)) {
+        onNavigateToMalId(nextMalId);
+      } else {
+        window.location.reload();
+      }
     } catch (error) {
       notifyToast({
         kind: "error",
@@ -688,14 +749,69 @@ function AnimeDetailBody({
     }
   }
 
+  async function downloadPoster() {
+    if (!poster) {
+      notifyToast({ kind: "info", message: "Aucune image à télécharger." });
+      return;
+    }
+    const result = await downloadImageToDownloads(
+      poster,
+      `${(draft.titleFr || resolved.title || "anime").trim()}-poster`
+    );
+    if (result.ok) {
+      notifyToast({ kind: "success", message: `Image téléchargée: ${result.path}` });
+      return;
+    }
+    notifyToast({ kind: "error", message: result.error });
+  }
+
+  async function downloadGalleryImage(src: string, index: number) {
+    const result = await downloadImageToDownloads(
+      src,
+      `${(draft.titleFr || resolved.title || "anime").trim()}-galerie-${index + 1}`
+    );
+    if (result.ok) {
+      notifyToast({ kind: "success", message: `Image téléchargée: ${result.path}` });
+      return;
+    }
+    notifyToast({ kind: "error", message: result.error });
+  }
+
+  async function deleteCurrentAnimeEntry() {
+    if (deleting) {
+      return;
+    }
+    const confirmed = window.confirm("Supprimer cette fiche animé locale ?");
+    if (!confirmed) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const supabase = getSupabaseClient();
+      await deleteAnimeEntry(supabase, rowId);
+      notifyToast({ kind: "success", message: "Fiche supprimée." });
+      onDeleted();
+    } catch (error) {
+      notifyToast({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Suppression impossible.",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <section className="anime-detail-body">
       <LibraryDetailStickyHeader
         backTo="/anime"
         backLabel="← Retour à la collection animés"
+        backState={backState}
         onSync={() => void openSyncDiffModal()}
         onEdit={() => setIsEditModalOpen(true)}
         onRefresh={() => window.location.reload()}
+        onDelete={() => void deleteCurrentAnimeEntry()}
+        deleting={deleting}
         editLabel="Modifier la fiche"
         syncTitle="Relancer la synchronisation MAL pour cette fiche"
         refreshTitle="Recharge les données Jikan/MAL pour cette fiche"
@@ -709,6 +825,13 @@ function AnimeDetailBody({
         onTranslate={() => void translateSynopsisToFrench()}
         translateDisabled={translatingSynopsis}
         onChange={(key, value) => updateDraft(key as keyof typeof draft, value as never)}
+        helpTitle="Aide au remplissage"
+        helpLines={[
+          "Statut oeuvre doit rester dans les valeurs MAL officielles.",
+          "Liens: utiliser des URLs complètes (https://...).",
+          "Synopsis source = texte brut d'origine ; Synopsis FR = adaptation/traduction.",
+          "Champs numériques attendent une valeur entière positive ou 0.",
+        ]}
         onClose={() => setIsEditModalOpen(false)}
         onSave={() => void saveEditedAnimeEntry()}
       />
@@ -717,19 +840,29 @@ function AnimeDetailBody({
         <div className="anime-detail-hero anime-detail-hero-legacy">
           <aside className="anime-detail-left-panel">
             {poster ? (
-              <button
-                type="button"
-                className="anime-detail-image-btn"
-                onClick={() => openPreview([poster], 0)}
-              >
-                <img
-                  className="anime-detail-poster anime-detail-poster-legacy"
-                  src={poster}
-                  alt=""
-                  width={260}
-                  height={390}
-                />
-              </button>
+              <div className="library-downloadable-image is-main-cover">
+                <button
+                  type="button"
+                  className="anime-detail-image-btn"
+                  onClick={() => openPreview([poster], 0)}
+                >
+                  <img
+                    className="anime-detail-poster anime-detail-poster-legacy"
+                    src={poster}
+                    alt=""
+                    width={260}
+                    height={390}
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="library-download-image-btn"
+                  onClick={() => void downloadPoster()}
+                  title="Télécharger l'image"
+                >
+                  💾
+                </button>
+              </div>
             ) : (
               <div className="anime-detail-poster anime-detail-poster-legacy" aria-hidden />
             )}
@@ -837,6 +970,7 @@ function AnimeDetailBody({
             <LibraryMediaGallery
               images={report.pictures.ok ? galleryImageSources.filter(Boolean) : []}
               emptyMessage="Galerie indisponible."
+              onDownloadImage={(src, index) => void downloadGalleryImage(src, index)}
             />
           </div>
         </div>

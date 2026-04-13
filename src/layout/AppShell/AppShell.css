@@ -105,6 +105,67 @@
   padding: 0 16px;
 }
 
+.app-shell-freshness {
+  display: grid;
+  gap: 6px;
+  padding: 0 16px 12px;
+}
+
+.app-shell-freshness-badge {
+  position: relative;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface) 92%, var(--background));
+}
+
+.app-shell-freshness-text {
+  display: inline-block;
+}
+
+.app-shell-freshness-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 220px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  background: color-mix(in srgb, var(--background) 94%, #000 6%);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.app-shell-freshness-badge:hover .app-shell-freshness-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.app-shell-freshness-badge.is-running {
+  border-color: color-mix(in srgb, #3b82f6 55%, var(--border));
+  color: #93c5fd;
+}
+
+.app-shell-freshness-badge.is-fresh {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  color: #6ee7b7;
+}
+
+.app-shell-freshness-badge.is-stale {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  color: #fbbf24;
+}
+
 .app-shell-nav-link {
   display: flex;
   align-items: center;

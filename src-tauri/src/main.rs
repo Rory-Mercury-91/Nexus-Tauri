@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +41,32 @@ fn clear_pending_import(state: State<SharedImportState>) -> bool {
         return true;
     }
     false
+}
+
+#[tauri::command]
+fn save_image_to_downloads(url: String, file_name: Option<String>) -> Result<String, String> {
+    let bytes = download_image(&url).map_err(|e| format!("Téléchargement impossible: {}", e))?;
+    let downloads_dir = dirs::download_dir().ok_or("Dossier Téléchargements introuvable.")?;
+    let clean_name = file_name
+        .unwrap_or_else(|| "nexus-image".to_string())
+        .chars()
+        .map(|c| if r#"/\:*?"<>|"#.contains(c) { '_' } else { c })
+        .collect::<String>();
+    let ext = url
+        .split('?')
+        .next()
+        .and_then(|base| base.rsplit('.').next())
+        .map(|v| v.to_lowercase())
+        .filter(|v| ["jpg", "jpeg", "png", "webp", "gif"].contains(&v.as_str()))
+        .unwrap_or_else(|| "jpg".to_string());
+    let mut candidate = downloads_dir.join(format!("{}.{}", clean_name, ext));
+    let mut idx = 1;
+    while candidate.exists() {
+        candidate = downloads_dir.join(format!("{}-{}.{}", clean_name, idx, ext));
+        idx += 1;
+    }
+    fs::write(&candidate, bytes).map_err(|e| format!("Écriture impossible: {}", e))?;
+    Ok(candidate.to_string_lossy().to_string())
 }
 
 fn now_timestamp_ms() -> i64 {
@@ -346,11 +372,36 @@ fn main() {
 
     let import_state: SharedImportState = Arc::new(Mutex::new(ImportState::default()));
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().handle_cli_arguments(argv);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(import_state.clone())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_pending_import, clear_pending_import])
+        .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            get_pending_import,
+            clear_pending_import,
+            save_image_to_downloads
+        ])
         .setup(move |app| {
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().handle_cli_arguments(std::env::args());
+                if let Err(err) = app.deep_link().register_all() {
+                    eprintln!("⚠️ [deep-link] register_all: {:?}", err);
+                }
+            }
             let app_handle = app.handle().clone();
             start_local_import_server(app_handle, import_state.clone());
             Ok(())

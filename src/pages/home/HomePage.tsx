@@ -3,6 +3,11 @@ import { Link } from "react-router-dom";
 import { useDataFetchOverlay } from "@/contexts/DataFetchOverlayContext";
 import { useSession } from "@/hooks/useSession";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import {
+  getHomeDashboardCache,
+  isHomeDashboardCacheFresh,
+  setHomeDashboardCache,
+} from "@/lib/homeDashboardCache";
 import type { FamilyMemberProfile } from "@/services/family/familyService";
 import {
   buildOwnerCards,
@@ -50,7 +55,6 @@ export function HomePage() {
     useState<DashboardCategory>("subscriptions");
   const [dataLoaded, setDataLoaded] = useState(false);
   const [libraryProgress, setLibraryProgress] = useState<LibraryProgressSnapshot | null>(null);
-  const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [recentCollapsed, setRecentCollapsed] = useState(false);
   const [ownersCollapsed, setOwnersCollapsed] = useState(true);
   const [chartCollapsed, setChartCollapsed] = useState(true);
@@ -58,6 +62,19 @@ export function HomePage() {
   const load = useCallback(async () => {
     if (!userId) {
       return;
+    }
+    const cached = getHomeDashboardCache(userId);
+    if (cached) {
+      setRecurring(cached.recurring);
+      setOneOff(cached.oneOff);
+      setProfiles(new Map(Object.entries(cached.profilesRecord)));
+      setMemberIds(cached.memberIds);
+      setReadingVolumes(cached.readingVolumes);
+      setLibraryProgress(cached.libraryProgress);
+      setDataLoaded(true);
+      if (isHomeDashboardCacheFresh(cached)) {
+        return;
+      }
     }
     beginPageDataLoad();
     try {
@@ -72,6 +89,14 @@ export function HomePage() {
       setMemberIds(d.memberIds);
       setReadingVolumes(d.readingVolumes);
       setLibraryProgress(progress);
+      setHomeDashboardCache(userId, {
+        recurring: d.recurring,
+        oneOff: d.oneOff,
+        profilesRecord: Object.fromEntries(d.profiles.entries()),
+        memberIds: d.memberIds,
+        readingVolumes: d.readingVolumes,
+        libraryProgress: progress,
+      });
     } finally {
       endPageDataLoad();
       setDataLoaded(true);

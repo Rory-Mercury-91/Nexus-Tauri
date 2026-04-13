@@ -1,13 +1,10 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { FilePickField } from "@/components/common/FilePickField";
+import { Link } from "react-router-dom";
 import { notifyProfileChanged } from "@/lib/profileEvents";
-import { getSupabaseClient } from "@/lib/supabaseClient";
 import {
   signInWithEmailPassword,
   signUpWithEmailPassword,
 } from "@/services/auth/authActions";
-import { updateProfileAvatarPath } from "@/services/profile/updateAvatarPath";
-import { uploadUserAvatarObject } from "@/services/storage/avatarStorage";
 import "./AuthPanel.css";
 
 export type AuthTab = "login" | "register";
@@ -24,8 +21,6 @@ export function AuthPanel({ initialTab, onSuccess }: AuthPanelProps) {
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [pseudo, setPseudo] = useState("");
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -34,21 +29,6 @@ export function AuthPanel({ initialTab, onSuccess }: AuthPanelProps) {
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
-
-  function handleAvatarChange(file: File | undefined) {
-    setAvatarFile(file ?? null);
-    setAvatarPreview(null);
-    if (!file) {
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setAvatarPreview(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  }
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -84,35 +64,11 @@ export function AuthPanel({ initialTab, onSuccess }: AuthPanelProps) {
       }
       if (!result.hasSession) {
         setInfo(
-          avatarFile
-            ? "Compte créé : sans session immédiate (souvent confirmation e-mail), la photo n’a pas été envoyée. Après la première connexion, ajoute-la dans Paramètres."
-            : "Si la confirmation e-mail est activée sur Supabase, ouvrez le lien reçu par mail puis connectez-vous. Sinon, essayez de vous connecter."
+          "Compte créé. Si la confirmation e-mail est activée sur Supabase, ouvre le lien reçu puis connecte-toi."
         );
         return;
       }
-      if (avatarFile) {
-        const supabase = getSupabaseClient();
-        await supabase.auth.getSession();
-        const uploaded = await uploadUserAvatarObject(
-          supabase,
-          result.userId,
-          avatarFile
-        );
-        if (!uploaded.ok) {
-          setError(uploaded.error);
-          return;
-        }
-        const saved = await updateProfileAvatarPath(
-          supabase,
-          result.userId,
-          uploaded.path
-        );
-        if (!saved.ok) {
-          setError(saved.message);
-          return;
-        }
-        notifyProfileChanged();
-      }
+      notifyProfileChanged();
       onSuccess?.();
     } finally {
       setLoading(false);
@@ -187,6 +143,7 @@ export function AuthPanel({ initialTab, onSuccess }: AuthPanelProps) {
               <button type="submit" disabled={loading}>
                 {loading ? "Connexion…" : "Se connecter"}
               </button>
+              <Link to="/auth/forgot-password">Mot de passe oublié ?</Link>
             </div>
           </form>
         </>
@@ -247,23 +204,6 @@ export function AuthPanel({ initialTab, onSuccess }: AuthPanelProps) {
                 value={pseudo}
                 onChange={(ev) => setPseudo(ev.target.value)}
               />
-            </div>
-            <div className="auth-field">
-              <span className="auth-field-label">Image</span>
-              <FilePickField
-                accept="image/*"
-                buttonLabel="Choisir un fichier"
-                selectedLabel={avatarFile?.name ?? null}
-                onFileChange={handleAvatarChange}
-                disabled={loading}
-              />
-              {avatarPreview ? (
-                <img
-                  className="auth-preview"
-                  src={avatarPreview}
-                  alt="Aperçu avatar"
-                />
-              ) : null}
             </div>
             <div className="auth-actions">
               <button type="submit" disabled={loading}>

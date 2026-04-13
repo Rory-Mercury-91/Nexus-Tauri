@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { translateLibraryTerms } from "@/services/library/termTranslations";
+import { listFamilyVisibleProfiles } from "@/services/family/familyService";
 
 export type ReadingCollectionEntry = {
   id: string;
@@ -19,7 +20,21 @@ export type ReadingCollectionEntry = {
   imageUrl: string;
   addedAt: string;
   hasFamilyOwners: boolean;
+  nautiljonNeedsManualImport: boolean;
+  malChaptersRead: number;
+  malChaptersTotal: number;
+  mihonChaptersRead: number;
+  mihonChaptersTotal: number;
+  mihonEnabledByCurrentUser: boolean;
+  preferMihonProgress: boolean;
+  mihonUsers: string[];
+  mihonUserBadges: Array<{ name: string; avatarPath: string | null }>;
+  hasMihonInFamily: boolean;
 };
+
+const PG_INT_MAX = 2_147_483_647;
+const MANUAL_ID_MIN = 1_900_000_000;
+const MANUAL_ID_MAX = 2_100_000_000;
 
 function normalizeStatus(value: unknown): string {
   return String(value ?? "")
@@ -126,11 +141,30 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
     // S'assurer que l'utilisateur actuel est toujours dans la liste
     familyMemberIds = Array.from(new Set([userId, ...(membersData ?? []).map(m => m.user_id)]));
   }
+  const visibleProfiles = await listFamilyVisibleProfiles(supabase);
+  const profileNameById = new Map(
+    visibleProfiles.map((profile) => [
+      profile.id,
+      profile.display_name?.trim() || profile.id.slice(0, 8),
+    ])
+  );
+  const profileAvatarById = new Map(
+    visibleProfiles.map((profile) => [profile.id, profile.avatar_storage_path ?? null])
+  );
   
   // Récupérer les volumes avec propriétaires pour toutes les lectures
   const readingIds = rows.map(r => r.id);
   const volumeOwnersMap = new Map<string, Set<string>>();
   const volumesByReadingId = new Map<string, Array<{ is_read: boolean }>>();
+  const mihonPresenceByReadingId = new Map<
+    string,
+    Array<{
+      userId: string;
+      chaptersRead: number;
+      chaptersTotal: number;
+      preferMihonProgress: boolean;
+    }>
+  >();
   
   if (readingIds.length > 0) {
     const BATCH_SIZE = 50;
@@ -141,15 +175,27 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
         .select("reading_id, is_read, reading_volume_owners(user_id)")
         .in("reading_id", batch);
       
-      (volumesData ?? []).forEach((vol: any) => {
-        const readingId = vol.reading_id as string;
+      type VolumeOwnerRow = { user_id?: string | null };
+      type VolumeRow = {
+        reading_id?: string | null;
+        is_read?: boolean | null;
+        reading_volume_owners?: VolumeOwnerRow[] | null;
+      };
+      (volumesData ?? []).forEach((vol) => {
+        const typedVol = vol as VolumeRow;
+        const readingId = String(typedVol.reading_id ?? "");
+        if (!readingId) {
+          return;
+        }
         
         // Stocker les propriétaires
         if (!volumeOwnersMap.has(readingId)) {
           volumeOwnersMap.set(readingId, new Set());
         }
-        const owners = Array.isArray(vol.reading_volume_owners) ? vol.reading_volume_owners : [];
-        owners.forEach((owner: any) => {
+        const owners = Array.isArray(typedVol.reading_volume_owners)
+          ? typedVol.reading_volume_owners
+          : [];
+        owners.forEach((owner) => {
           if (owner.user_id) {
             volumeOwnersMap.get(readingId)!.add(owner.user_id);
           }
@@ -159,7 +205,37 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
         if (!volumesByReadingId.has(readingId)) {
           volumesByReadingId.set(readingId, []);
         }
-        volumesByReadingId.get(readingId)!.push({ is_read: Boolean(vol.is_read) });
+        volumesByReadingId.get(readingId)!.push({ is_read: Boolean(typedVol.is_read) });
+      });
+    }
+
+    for (let i = 0; i < readingIds.length; i += BATCH_SIZE) {
+      const batch = readingIds.slice(i, i + BATCH_SIZE);
+      const { data: mihonData } = await supabase
+        .from("reading_mihon_presence")
+        .select("reading_id, user_id, chapters_read, chapters_total, prefer_mihon_progress")
+        .in("reading_id", batch);
+
+      type MihonPresenceRow = {
+        reading_id?: string | null;
+        user_id?: string | null;
+        chapters_read?: number | null;
+        chapters_total?: number | null;
+        prefer_mihon_progress?: boolean | null;
+      };
+      (mihonData ?? []).forEach((row) => {
+        const typedRow = row as MihonPresenceRow;
+        const readingId = String(typedRow.reading_id ?? "");
+        if (!readingId) return;
+        if (!mihonPresenceByReadingId.has(readingId)) {
+          mihonPresenceByReadingId.set(readingId, []);
+        }
+        mihonPresenceByReadingId.get(readingId)!.push({
+          userId: String(typedRow.user_id ?? ""),
+          chaptersRead: Number(typedRow.chapters_read ?? 0),
+          chaptersTotal: Number(typedRow.chapters_total ?? 0),
+          preferMihonProgress: Boolean(typedRow.prefer_mihon_progress ?? true),
+        });
       });
     }
   }
@@ -172,7 +248,7 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
     const listEntry = (malSnapshot.list_entry ?? {}) as Record<string, unknown>;
     const listStatus = toListStatus(malSnapshot);
     const rawReadStatus = (row.read_status as string | null) ?? listStatus.status ?? null;
-    const chaptersRead = Number(listStatus.num_chapters_read ?? listStatus.num_chapters_readed ?? 0);
+    const malChaptersRead = Number(listStatus.num_chapters_read ?? listStatus.num_chapters_readed ?? 0);
     
     // Utiliser exactement la même logique que homeDashboardService
     // Ajouter jikanSnapshot.chapters comme fallback supplémentaire
@@ -187,8 +263,8 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
     
     // Heuristique: si chaptersTotal est 0 mais qu'on a lu des chapitres,
     // utiliser chaptersRead comme valeur minimale (les données Jikan peuvent être incomplètes)
-    if (chaptersTotal === 0 && chaptersRead > 0) {
-      chaptersTotal = chaptersRead;
+    if (chaptersTotal === 0 && malChaptersRead > 0) {
+      chaptersTotal = malChaptersRead;
     }
     
     // Pour les volumes : utiliser la même logique que ReadingDetailPage
@@ -232,6 +308,36 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
     const owners = volumeOwnersMap.get(readingId) ?? new Set();
     const hasFamilyOwners = familyMemberIds.some(memberId => owners.has(memberId));
     
+    const mihonEntries = mihonPresenceByReadingId.get(readingId) ?? [];
+    const currentUserMihon = mihonEntries.find((entry) => entry.userId === userId) ?? null;
+    const hasMihonInFamily = mihonEntries.some((entry) => familyMemberIds.includes(entry.userId));
+    const mihonUsers = mihonEntries
+      .filter((entry) => familyMemberIds.includes(entry.userId))
+      .map((entry) =>
+        entry.userId === userId
+          ? "Moi"
+          : profileNameById.get(entry.userId) ?? `Membre ${entry.userId.slice(0, 8)}`
+      );
+    const mihonUserBadges = mihonEntries
+      .filter((entry) => familyMemberIds.includes(entry.userId))
+      .map((entry) => ({
+        name:
+          entry.userId === userId
+            ? "Moi"
+            : profileNameById.get(entry.userId) ?? `Membre ${entry.userId.slice(0, 8)}`,
+        avatarPath: profileAvatarById.get(entry.userId) ?? null,
+      }));
+    const mihonChaptersRead = Math.max(0, Number(currentUserMihon?.chaptersRead ?? 0));
+    const mihonChaptersTotal = Math.max(
+      0,
+      Number(currentUserMihon?.chaptersTotal ?? currentUserMihon?.chaptersRead ?? 0)
+    );
+    const preferMihonProgress = Boolean(currentUserMihon?.preferMihonProgress ?? false);
+    const chaptersRead = preferMihonProgress ? mihonChaptersRead : malChaptersRead;
+    const chaptersTotalResolved = preferMihonProgress
+      ? (mihonChaptersTotal > 0 ? mihonChaptersTotal : chaptersTotal)
+      : chaptersTotal;
+
     return {
       id: readingId,
       malId: Number(row.mal_manga_id),
@@ -242,7 +348,7 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       score: Number.isFinite(score) ? score : 0,
       favorite,
       chaptersRead: Number.isFinite(chaptersRead) ? chaptersRead : 0,
-      chaptersTotal: Number.isFinite(chaptersTotal) ? chaptersTotal : 0,
+      chaptersTotal: Number.isFinite(chaptersTotalResolved) ? chaptersTotalResolved : 0,
       volumesRead: Number.isFinite(volumesRead) ? volumesRead : 0,
       volumesTotal: Number.isFinite(volumesTotal) ? volumesTotal : 0,
       genres: translateLibraryTerms("genre", genres),
@@ -250,8 +356,90 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       imageUrl,
       addedAt: String(row.created_at),
       hasFamilyOwners,
+      nautiljonNeedsManualImport: Boolean(manualOverrides.nautiljon_needs_manual_import ?? false),
+      malChaptersRead: Number.isFinite(malChaptersRead) ? malChaptersRead : 0,
+      malChaptersTotal: Number.isFinite(chaptersTotal) ? chaptersTotal : 0,
+      mihonChaptersRead,
+      mihonChaptersTotal,
+      mihonEnabledByCurrentUser: Boolean(currentUserMihon),
+      preferMihonProgress,
+      mihonUsers: Array.from(new Set(mihonUsers)),
+      mihonUserBadges,
+      hasMihonInFamily,
     };
   });
+}
+
+export async function setReadingMihonState(
+  supabase: SupabaseClient,
+  rowId: string,
+  enabled: boolean,
+  payload?: { chaptersRead?: number; chaptersTotal?: number; preferMihonProgress?: boolean }
+): Promise<void> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError) {
+    throw new Error(userError.message);
+  }
+  if (!user?.id) {
+    throw new Error("Utilisateur non connecté.");
+  }
+
+  if (!enabled) {
+    const { error } = await supabase
+      .from("reading_mihon_presence")
+      .delete()
+      .eq("reading_id", rowId)
+      .eq("user_id", user.id);
+    if (error) {
+      throw new Error(error.message);
+    }
+    return;
+  }
+
+  const { error } = await supabase.from("reading_mihon_presence").upsert(
+    {
+      reading_id: rowId,
+      user_id: user.id,
+      chapters_read: Math.max(0, Number(payload?.chaptersRead ?? 0)),
+      chapters_total: Math.max(
+        0,
+        Number(payload?.chaptersTotal ?? payload?.chaptersRead ?? 0)
+      ),
+      prefer_mihon_progress: Boolean(payload?.preferMihonProgress ?? true),
+    },
+    { onConflict: "reading_id,user_id" }
+  );
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function fetchReadingCollectionStamp(
+  supabase: SupabaseClient
+): Promise<{ latestUpdatedAt: string | null; count: number }> {
+  const [{ data: latestRows, error: latestError }, { count, error: countError }] = await Promise.all([
+    supabase
+      .from("library_reading")
+      .select("updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("library_reading")
+      .select("id", { count: "exact", head: true }),
+  ]);
+  if (latestError) {
+    throw new Error(latestError.message);
+  }
+  if (countError) {
+    throw new Error(countError.message);
+  }
+  return {
+    latestUpdatedAt: latestRows?.[0]?.updated_at ?? null,
+    count: Number(count ?? 0),
+  };
 }
 
 export async function updateReadingStatus(
@@ -309,6 +497,202 @@ export async function updateReadingFavorite(
       updated_at: new Date().toISOString(),
     })
     .eq("id", rowId);
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+function buildManualReadingFull(malId: number, title: string, imageUrl: string): Record<string, unknown> {
+  return {
+    mal_id: malId,
+    url: `https://myanimelist.net/manga/${malId}`,
+    title,
+    title_english: title,
+    title_japanese: "",
+    title_synonyms: [],
+    type: "Manga",
+    status: "Publishing",
+    score: 0,
+    synopsis: "",
+    chapters: 0,
+    volumes: 0,
+    published: { from: null, to: null, string: "" },
+    images: {
+      jpg: {
+        image_url: imageUrl,
+        large_image_url: imageUrl,
+      },
+      webp: {
+        image_url: imageUrl,
+        large_image_url: imageUrl,
+      },
+    },
+    genres: [],
+    themes: [],
+    demographics: [],
+    authors: [],
+    serializations: [],
+    relations: [],
+    external: [],
+  };
+}
+
+export async function createManualReadingEntry(
+  supabase: SupabaseClient,
+  input: {
+    title: string;
+    malId?: number;
+    imageUrl?: string;
+    titleEnglish?: string;
+    titleJapanese?: string;
+    titleAlternatives?: string[];
+    mediaType?: string;
+    workStatus?: string;
+    chapters?: number;
+    volumes?: number;
+    synopsis?: string;
+    synopsisFr?: string;
+    score?: number;
+    authors?: string;
+    scenarist?: string;
+    dessinateur?: string;
+    traducteur?: string;
+    serializations?: string;
+    prepublie?: string;
+    editeurVf?: string;
+    editeurVo?: string;
+    publishedString?: string;
+    anneeVf?: string;
+    anneeVo?: string;
+    volumesVf?: number;
+    ageConseille?: string;
+    groupe?: string;
+    linkMal?: string;
+    linkNautiljon?: string;
+    linkAnilist?: string;
+    userStatus?: ReadingCollectionEntry["userStatus"];
+    favorite?: boolean;
+  }
+): Promise<number> {
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error("Le titre est obligatoire.");
+  }
+  const malId = await resolveManualReadingMalId(supabase, input.malId);
+  const imageUrl = (input.imageUrl ?? "").trim();
+  const full = buildManualReadingFull(malId, title, imageUrl);
+  full.title_english = input.titleEnglish?.trim() || title;
+  full.title_japanese = input.titleJapanese?.trim() || "";
+  full.title_synonyms = input.titleAlternatives ?? [];
+  full.type = input.mediaType?.trim() || "Manga";
+  full.status = input.workStatus?.trim() || "Publishing";
+  full.chapters = Math.max(0, Number(input.chapters ?? 0));
+  full.volumes = Math.max(0, Number(input.volumes ?? 0));
+  full.synopsis = input.synopsis?.trim() || "";
+  full.score = Number(input.score ?? 0);
+  full.url = input.linkMal?.trim() || `https://myanimelist.net/manga/${malId}`;
+  full.authors = String(input.authors ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((name) => ({ name }));
+  full.serializations = String(input.serializations ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((name) => ({ name }));
+  full.published = {
+    from: null,
+    to: null,
+    string: input.publishedString?.trim() || "",
+  };
+  const userStatus = input.userStatus ?? "Planifié";
+  const favorite = Boolean(input.favorite ?? false);
+  const malSnapshot = {
+    list_entry: {
+      list_status: {
+        status: mapUserStatusToReadStatus(userStatus),
+        score: 0,
+        num_chapters_read: 0,
+        num_volumes_read: 0,
+        is_favorite: favorite,
+      },
+    },
+    manual_overrides: {
+      title_fr: title,
+      synopsis_fr: input.synopsisFr?.trim() || "",
+      titre_original: input.titleJapanese?.trim() || "",
+      volumes_vf:
+        Number.isFinite(input.volumesVf) && Number(input.volumesVf) > 0
+          ? Number(input.volumesVf)
+          : null,
+      editeur_vf: input.editeurVf?.trim() || "",
+      editeur_vo: input.editeurVo?.trim() || "",
+      annee_vf: input.anneeVf?.trim() || "",
+      annee_vo: input.anneeVo?.trim() || "",
+      traducteur: input.traducteur?.trim() || "",
+      scenarist: input.scenarist?.trim() || "",
+      dessinateur: input.dessinateur?.trim() || "",
+      age_conseille: input.ageConseille?.trim() || "",
+      groupe: input.groupe?.trim() || "",
+      prepublie: input.prepublie?.trim() || "",
+      locked_field_ids: ["title", "status", "chapters", "volumes", "synopsis"],
+      links: {
+        mal: input.linkMal?.trim() || "",
+        nautiljon: input.linkNautiljon?.trim() || "",
+        anilist: input.linkAnilist?.trim() || "",
+      },
+    },
+  };
+  const { error } = await supabase.from("library_reading").insert({
+    mal_manga_id: malId,
+    title,
+    read_status: mapUserStatusToReadStatus(userStatus),
+    main_picture_url: imageUrl || null,
+    jikan_snapshot: { full },
+    mal_official_snapshot: malSnapshot,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return malId;
+}
+
+async function resolveManualReadingMalId(
+  supabase: SupabaseClient,
+  preferredMalId?: number
+): Promise<number> {
+  if (Number.isFinite(preferredMalId) && (preferredMalId ?? 0) > 0) {
+    const value = Number(preferredMalId);
+    if (value > PG_INT_MAX) {
+      throw new Error("Le MAL ID manuel dépasse la limite autorisée.");
+    }
+    return value;
+  }
+  for (let i = 0; i < 16; i += 1) {
+    const candidate =
+      MANUAL_ID_MIN + Math.floor(Math.random() * (MANUAL_ID_MAX - MANUAL_ID_MIN));
+    const { data, error } = await supabase
+      .from("library_reading")
+      .select("id")
+      .eq("mal_manga_id", candidate)
+      .maybeSingle();
+    if (error) {
+      throw new Error(error.message);
+    }
+    if (!data) {
+      return candidate;
+    }
+  }
+  throw new Error("Impossible de générer un identifiant manuel unique.");
+}
+
+export async function deleteReadingEntry(
+  supabase: SupabaseClient,
+  rowId: string
+): Promise<void> {
+  const { error } = await supabase.from("library_reading").delete().eq("id", rowId);
   if (error) {
     throw new Error(error.message);
   }
