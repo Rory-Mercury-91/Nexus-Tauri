@@ -209,7 +209,7 @@ export function ReadingDetailPage() {
   }, [id]);
 
   const [chaptersRead, setChaptersRead] = useState(0);
-  const [chaptersTotal, setChaptersTotal] = useState(241);
+  const [chaptersTotal, setChaptersTotal] = useState(0);
   const [volumesRead, setVolumesRead] = useState(0);
   const [userReadStatus, setUserReadStatus] = useState<string>("Planifié");
   const [userFavorite, setUserFavorite] = useState(false);

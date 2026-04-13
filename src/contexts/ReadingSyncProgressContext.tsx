@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSupabaseClient } from "@/lib/supabaseClient";
+import { appendClientLog } from "@/services/observability/clientLogService";
+import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
 import {
   getReadingSyncStatus,
@@ -51,7 +53,9 @@ export function ReadingSyncProgressProvider({ children }: { children: ReactNode 
       setRecentRuns(status.recent_runs);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur synchronisation lectures.");
+      const message = e instanceof Error ? e.message : "Erreur synchronisation lectures.";
+      setError(message);
+      appendClientLog("error", "sync.reading.status", message);
     } finally {
       inFlightRef.current = false;
     }
@@ -66,20 +70,44 @@ export function ReadingSyncProgressProvider({ children }: { children: ReactNode 
     }
   }, [load]);
 
+  const ensureProviderConnected = useCallback(async (source: SyncSource): Promise<boolean> => {
+    const supabase = getSupabaseClient();
+    const status = await fetchIntegrationStatus(supabase, source);
+    if (!status.ok) {
+      const message = `Impossible de vérifier la connexion ${source.toUpperCase()}: ${status.error}`;
+      setError(message);
+      appendClientLog("warn", "sync.reading.provider-check", message);
+      return false;
+    }
+    if (!status.status.connected) {
+      const message = `Synchronisation ${source.toUpperCase()} ignorée: intégration non connectée.`;
+      setError(message);
+      appendClientLog("info", "sync.reading.provider-check", message);
+      return false;
+    }
+    return true;
+  }, []);
+
   const startSync = useCallback(async (source: SyncSource, options?: SyncStartOptions) => {
     const supabase = getSupabaseClient();
     setLoading(true);
     try {
+      const connected = await ensureProviderConnected(source);
+      if (!connected) {
+        return;
+      }
       await startReadingSync(supabase, source, options);
       await load();
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Échec lancement synchronisation lectures.");
+      const message = e instanceof Error ? e.message : "Échec lancement synchronisation lectures.";
+      setError(message);
+      appendClientLog("error", "sync.reading.start", message);
       throw e;
     } finally {
       setLoading(false);
     }
-  }, [load]);
+  }, [ensureProviderConnected, load]);
 
   useEffect(() => {
     void load();

@@ -23,6 +23,9 @@ const DEFAULT_STATUS: IntegrationConnectionStatus = {
   expiresAt: null,
 };
 
+const TAMPERMONKEY_SCRIPT_URL =
+  "https://raw.githubusercontent.com/Rory-Mercury-91/Nexus-Tauri/main/public/tampermonkey/Nautiljon%20Extractor.user.js";
+
 /**
  * Onglet "Intégrations" : connexion OAuth MAL et AniList.
  */
@@ -183,6 +186,13 @@ export function IntegrationsSettingsPanel() {
     []
   );
 
+  const openTampermonkeyScript = useCallback(async () => {
+    const openedExternally = await openExternalUrl(TAMPERMONKEY_SCRIPT_URL);
+    if (!openedExternally) {
+      window.open(TAMPERMONKEY_SCRIPT_URL, "_blank", "noopener,noreferrer");
+    }
+  }, []);
+
   return (
     <div className="integrations-settings">
       {globalInfo ? <p className="settings-success">{globalInfo}</p> : null}
@@ -249,6 +259,24 @@ export function IntegrationsSettingsPanel() {
           </section>
         );
       })}
+      <section className="settings-block integrations-settings-block" aria-labelledby="integrations-tampermonkey">
+        <h2 id="integrations-tampermonkey" className="settings-block-title">
+          Tampermonkey (Nautiljon)
+        </h2>
+        <p className="settings-block-lead">
+          Installe directement le script Nautiljon depuis GitHub pour enrichir
+          automatiquement les fiches lectures depuis ton navigateur.
+        </p>
+        <div className="integrations-actions integrations-tampermonkey-actions">
+          <button
+            type="button"
+            className="integrations-connect-btn"
+            onClick={() => void openTampermonkeyScript()}
+          >
+            Installer le script
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

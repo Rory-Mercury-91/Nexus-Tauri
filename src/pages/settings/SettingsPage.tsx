@@ -14,9 +14,10 @@ import { useSession } from "@/hooks/useSession";
 import { FamilySettingsPanel } from "./FamilySettingsPanel";
 import { IntegrationsSettingsPanel } from "./IntegrationsSettingsPanel";
 import { MihonSettingsPanel } from "./MihonSettingsPanel";
+import { SecurityLogsPanel } from "./SecurityLogsPanel";
 import "./SettingsPage.css";
 
-type SettingsTab = "profile" | "security" | "family" | "integrations" | "mihon";
+type SettingsTab = "profile" | "security" | "family" | "integrations" | "mihon" | "logs";
 
 /**
  * Paramètres en onglets : profil (pseudo + photo) et sécurité (mot de passe).
@@ -263,6 +264,22 @@ export function SettingsPage() {
         >
           Mihon
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "logs"}
+          className={
+            tab === "logs"
+              ? "settings-tab settings-tab-active"
+              : "settings-tab"
+          }
+          onClick={() => {
+            setTab("logs");
+            clearFeedback();
+          }}
+        >
+          Logs
+        </button>
       </div>
 
       {error ? <p className="settings-error">{error}</p> : null}
@@ -279,6 +296,10 @@ export function SettingsPage() {
       ) : tab === "mihon" ? (
         <div className="settings-tab-panel" role="tabpanel">
           <MihonSettingsPanel />
+        </div>
+      ) : tab === "logs" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <SecurityLogsPanel />
         </div>
       ) : tab === "profile" ? (
         <div className="settings-tab-panel" role="tabpanel">

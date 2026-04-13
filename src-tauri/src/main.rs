@@ -376,7 +376,7 @@ fn main() {
             #[cfg(any(windows, target_os = "linux"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.deep_link().handle_cli_arguments(argv);
+                app.deep_link().handle_cli_arguments(argv.into_iter());
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

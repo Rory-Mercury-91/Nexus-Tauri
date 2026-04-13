@@ -1,9 +1,13 @@
 // ==UserScript==
 // @name         Nautiljon → Nexus-Tauri (Lectures VF)
 // @namespace    https://nexus-tauri.local
-// @version      2.0.0
+// @version      2.0.1
 // @description  Extrait les données des mangas/light novels depuis Nautiljon (édition VF uniquement) et les envoie vers Nexus-Tauri
 // @author       Nexus Team
+// @homepageURL  https://github.com/Rory-Mercury-91/Nexus-Tauri
+// @supportURL   https://github.com/Rory-Mercury-91/Nexus-Tauri/issues
+// @updateURL    https://raw.githubusercontent.com/Rory-Mercury-91/Nexus-Tauri/main/public/tampermonkey/Nautiljon%20Extractor.user.js
+// @downloadURL  https://raw.githubusercontent.com/Rory-Mercury-91/Nexus-Tauri/main/public/tampermonkey/Nautiljon%20Extractor.user.js
 // @match        https://www.nautiljon.com/mangas/*
 // @match        https://www.nautiljon.com/light_novels/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nautiljon.com

@@ -1,6 +1,5 @@
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useDataFetchOverlay } from "@/contexts/DataFetchOverlayContext";
-import { openExternalUrl } from "@/lib/tauriWindow";
 import {
   getMihonSourceIndexStats,
   MIHON_KEIYOUSHI_INDEX_URL,
@@ -107,26 +106,6 @@ export function MihonSettingsPanel() {
     [beginPageDataLoad, endPageDataLoad]
   );
 
-  const tampermonkeyGuideUrl = new URL("/tampermonkey/INSTALLATION.html", window.location.origin).toString();
-  const tampermonkeyScriptUrl = new URL(
-    "/tampermonkey/Nautiljon%20Extractor.user.js",
-    window.location.origin
-  ).toString();
-
-  const openTampermonkeyGuide = useCallback(async () => {
-    const openedExternally = await openExternalUrl(tampermonkeyGuideUrl);
-    if (!openedExternally) {
-      window.open(tampermonkeyGuideUrl, "_blank", "noopener,noreferrer");
-    }
-  }, [tampermonkeyGuideUrl]);
-
-  const openTampermonkeyScript = useCallback(async () => {
-    const openedExternally = await openExternalUrl(tampermonkeyScriptUrl);
-    if (!openedExternally) {
-      window.open(tampermonkeyScriptUrl, "_blank", "noopener,noreferrer");
-    }
-  }, [tampermonkeyScriptUrl]);
-
   return (
     <div className="integrations-settings">
       <section className="settings-block integrations-settings-block" aria-labelledby="mihon-index">
@@ -220,30 +199,6 @@ export function MihonSettingsPanel() {
         ) : null}
       </section>
 
-      <section className="settings-block integrations-settings-block" aria-labelledby="mihon-tampermonkey">
-        <h2 id="mihon-tampermonkey" className="settings-block-title">
-          Tampermonkey (Nautiljon)
-        </h2>
-        <p className="settings-block-lead">
-          Installe le script Nautiljon directement depuis l’application pour enrichir les fiches lectures.
-        </p>
-        <div className="integrations-actions integrations-tampermonkey-actions">
-          <button
-            type="button"
-            className="integrations-connect-btn"
-            onClick={() => void openTampermonkeyGuide()}
-          >
-            Ouvrir le guide
-          </button>
-          <button
-            type="button"
-            className="family-settings-btn-secondary"
-            onClick={() => void openTampermonkeyScript()}
-          >
-            Télécharger / Installer le script
-          </button>
-        </div>
-      </section>
     </div>
   );
 }

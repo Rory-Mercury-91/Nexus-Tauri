@@ -8,6 +8,7 @@ import { ResyncQueueModal } from "@/components/modals/ResyncQueueModal/ResyncQue
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { useSession } from "@/hooks/useSession";
+import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import {
   deleteReadingEntry,
   fetchReadingCollection,
@@ -157,6 +158,10 @@ export function ReadingCollectionPage() {
   const [showMihonOnly, setShowMihonOnly] = useState(false);
   const [showDuplicateMalGroups, setShowDuplicateMalGroups] = useState(false);
   const [progressSourceMode, setProgressSourceMode] = useState<ProgressSourceMode>("auto");
+  const [integrationConnected, setIntegrationConnected] = useState({
+    mal: false,
+    anilist: false,
+  });
   
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -209,6 +214,33 @@ export function ReadingCollectionPage() {
     }
     void loadCollection(false);
   }, [loadCollection]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = getSupabaseClient();
+        const [malStatus, aniStatus] = await Promise.all([
+          fetchIntegrationStatus(supabase, "mal"),
+          fetchIntegrationStatus(supabase, "anilist"),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setIntegrationConnected({
+          mal: malStatus.ok && malStatus.status.connected,
+          anilist: aniStatus.ok && aniStatus.status.connected,
+        });
+      } catch {
+        if (!cancelled) {
+          setIntegrationConnected({ mal: false, anilist: false });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function updateUserStatus(itemId: number, status: StatusOption) {
     const target = items.find((entry) => entry.malId === itemId);
@@ -681,27 +713,43 @@ export function ReadingCollectionPage() {
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.mal}
             onClick={() => void onStartSync("mal")}
-            title={isSyncBusy ? "Synchronisation en cours, merci d'attendre la fin." : "Lancer la synchronisation MAL"}
+            title={
+              !integrationConnected.mal
+                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
+                : isSyncBusy
+                  ? "Synchronisation en cours, merci d'attendre la fin."
+                  : "Lancer la synchronisation MAL"
+            }
           >
             Sync MAL
           </button>
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy}
+            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist}
             onClick={() => void onStartSync("anilist")}
-            title={isSyncBusy ? "Synchronisation en cours, merci d'attendre la fin." : "Lancer la synchronisation AniList"}
+            title={
+              !integrationConnected.anilist
+                ? "Connecte d'abord AniList dans Paramètres > Intégrations."
+                : isSyncBusy
+                  ? "Synchronisation en cours, merci d'attendre la fin."
+                  : "Lancer la synchronisation AniList"
+            }
           >
             Sync AniList
           </button>
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={detectingChanges}
+            disabled={detectingChanges || !integrationConnected.mal}
             onClick={() => void detectChanges("mal")}
-            title="Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
+            title={
+              !integrationConnected.mal
+                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
+                : "Compare la base locale avec MAL/Jikan et propose une mise à jour champ par champ."
+            }
           >
             {detectingChanges ? "Détection..." : "Détecter changements (pré-sync)"}
           </button>

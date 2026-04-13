@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { appendClientLog } from "@/services/observability/clientLogService";
 
 export type SyncSource = "mal" | "anilist";
 export type SyncMediaType = "anime" | "reading";
@@ -38,6 +39,34 @@ export type SyncStartOptions = {
   selectedFieldIds?: string[];
   targetMalId?: number;
 };
+
+function stringifyPayloadSummary(payload: unknown): string {
+  if (!payload) {
+    return "";
+  }
+  if (typeof payload === "string") {
+    return payload;
+  }
+  if (typeof payload === "object") {
+    const data = payload as Record<string, unknown>;
+    const preferred = [
+      data.error,
+      data.message,
+      data.details,
+      data.hint,
+      data.code,
+    ].filter((value) => typeof value === "string" && value.trim().length > 0) as string[];
+    if (preferred.length > 0) {
+      return preferred.join(" | ");
+    }
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return String(payload);
+    }
+  }
+  return String(payload);
+}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const parts = token.split(".");
@@ -106,12 +135,15 @@ async function invokeFunction<T>(supabase: SupabaseClient, fn: string, body: unk
       if (!authResp.ok) {
         throw new Error(`Token rejeté par /auth/v1/user (HTTP ${authResp.status}).`);
       }
+      appendClientLog("info", "supabase.auth.user", "Connexion Supabase OK", `HTTP ${authResp.status}`);
     } catch (authError) {
       const msg = authError instanceof Error ? authError.message : "Token rejeté par Auth.";
+      appendClientLog("error", "supabase.auth.user", "Connexion Supabase rejetée", msg);
       throw new Error(`${msg} Déconnecte-toi puis reconnecte-toi.`);
     }
     const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${fn}`;
     try {
+      const startedAt = performance.now();
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -122,12 +154,22 @@ async function invokeFunction<T>(supabase: SupabaseClient, fn: string, body: unk
         body: JSON.stringify((body ?? {}) as Record<string, unknown>),
       });
       let payload: unknown = null;
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
+      const rawText = await response.text();
+      if (rawText.trim().length > 0) {
+        try {
+          payload = JSON.parse(rawText) as unknown;
+        } catch {
+          payload = rawText;
+        }
       }
       if (!response.ok) {
+        const summary = stringifyPayloadSummary(payload);
+        appendClientLog(
+          "error",
+          `supabase.functions.${fn}`,
+          `POST /functions/v1/${fn} échoué`,
+          `HTTP ${response.status}${summary ? ` — ${summary}` : ""}`
+        );
         return {
           data: null,
           error: {
@@ -136,8 +178,20 @@ async function invokeFunction<T>(supabase: SupabaseClient, fn: string, body: unk
           },
         };
       }
+      appendClientLog(
+        "info",
+        `supabase.functions.${fn}`,
+        `POST /functions/v1/${fn} OK`,
+        `HTTP ${response.status} — ${Math.round(performance.now() - startedAt)} ms`
+      );
       return { data: payload, error: null };
     } catch (networkError) {
+      appendClientLog(
+        "error",
+        `supabase.functions.${fn}`,
+        `POST /functions/v1/${fn} erreur réseau`,
+        networkError instanceof Error ? networkError.message : String(networkError)
+      );
       return { data: null, error: networkError };
     }
   }
@@ -160,9 +214,10 @@ async function invokeFunction<T>(supabase: SupabaseClient, fn: string, body: unk
         details = `HTTP ${withStatus.status}`;
       }
       if (withStatus.payload) {
+        const payloadSummary = stringifyPayloadSummary(withStatus.payload);
         details = details
-          ? `${details} — ${JSON.stringify(withStatus.payload)}`
-          : JSON.stringify(withStatus.payload);
+          ? `${details} — ${payloadSummary}`
+          : payloadSummary;
       }
     }
     const baseMessage = typed.message || "Erreur Edge Function";
@@ -198,19 +253,28 @@ export async function startAnimeSync(
   const selected = Array.isArray(options?.selectedFieldIds)
     ? options?.selectedFieldIds.filter((id) => typeof id === "string" && id.trim().length > 0)
     : [];
-  const data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
-    supabase,
-    "sync-start",
-    {
-      source,
-      media_type: "anime",
-      selected_field_ids: selected,
-      target_mal_id:
-        Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
-          ? Math.floor(Number(options?.targetMalId))
-          : null,
-    }
-  );
+  const targetMalId =
+    Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
+      ? Math.floor(Number(options?.targetMalId))
+      : null;
+  let data: { ok: boolean; run_id: string; reused?: boolean };
+  try {
+    data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
+      supabase,
+      "sync-start",
+      {
+        source,
+        media_type: "anime",
+        selected_field_ids: selected,
+        target_mal_id: targetMalId,
+      }
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Erreur inconnue";
+    throw new Error(
+      `[sync-start] media=anime source=${source} target_mal_id=${targetMalId ?? "null"} — ${reason}`
+    );
+  }
   if (!data?.ok || !data.run_id) {
     throw new Error("Impossible de démarrer la synchronisation.");
   }
@@ -225,19 +289,28 @@ export async function startReadingSync(
   const selected = Array.isArray(options?.selectedFieldIds)
     ? options?.selectedFieldIds.filter((id) => typeof id === "string" && id.trim().length > 0)
     : [];
-  const data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
-    supabase,
-    "sync-start",
-    {
-      source,
-      media_type: "reading",
-      selected_field_ids: selected,
-      target_mal_id:
-        Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
-          ? Math.floor(Number(options?.targetMalId))
-          : null,
-    }
-  );
+  const targetMalId =
+    Number.isFinite(options?.targetMalId) && Number(options?.targetMalId) > 0
+      ? Math.floor(Number(options?.targetMalId))
+      : null;
+  let data: { ok: boolean; run_id: string; reused?: boolean };
+  try {
+    data = await invokeFunction<{ ok: boolean; run_id: string; reused?: boolean }>(
+      supabase,
+      "sync-start",
+      {
+        source,
+        media_type: "reading",
+        selected_field_ids: selected,
+        target_mal_id: targetMalId,
+      }
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Erreur inconnue";
+    throw new Error(
+      `[sync-start] media=reading source=${source} target_mal_id=${targetMalId ?? "null"} — ${reason}`
+    );
+  }
   if (!data?.ok || !data.run_id) {
     throw new Error("Impossible de démarrer la synchronisation lectures.");
   }

@@ -25,6 +25,7 @@ export function FamilySettingsPanel() {
   const myId = session?.user.id ?? "";
 
   const [adminFamilyId, setAdminFamilyId] = useState<string | null>(null);
+  const [visibleFamilyId, setVisibleFamilyId] = useState<string | null>(null);
   const [members, setMembers] = useState<FamilyMemberWithRole[]>([]);
   const [familyName, setFamilyName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -37,20 +38,22 @@ export function FamilySettingsPanel() {
     beginPageDataLoad();
     try {
       const supabase = getSupabaseClient();
-      const familyId = await getFirstAdminFamilyId(supabase);
-      setAdminFamilyId(familyId);
+      const [firstAdminFamilyId, famRows] = await Promise.all([
+        getFirstAdminFamilyId(supabase),
+        listMyFamilies(supabase),
+      ]);
+      setAdminFamilyId(firstAdminFamilyId);
+      const displayFamilyId = firstAdminFamilyId ?? famRows[0]?.id ?? null;
+      setVisibleFamilyId(displayFamilyId);
 
-      if (!familyId) {
+      if (!displayFamilyId) {
         setMembers([]);
         setFamilyName("");
         return;
       }
 
-      const [famRows, memberRows] = await Promise.all([
-        listMyFamilies(supabase),
-        listFamilyMembersWithRole(supabase, familyId),
-      ]);
-      const selectedFamily = famRows.find((f) => f.id === familyId);
+      const memberRows = await listFamilyMembersWithRole(supabase, displayFamilyId);
+      const selectedFamily = famRows.find((f) => f.id === displayFamilyId);
       setFamilyName(selectedFamily?.name ?? "");
       setMembers(memberRows);
     } catch {
@@ -259,9 +262,9 @@ export function FamilySettingsPanel() {
         </h2>
         {members.length === 0 ? (
           <p className="family-settings-muted">
-            {adminFamilyId
+            {visibleFamilyId
               ? "Aucun membre visible pour ce foyer."
-              : "Aucun foyer admin trouvé. Crée d’abord un foyer."}
+              : "Aucun foyer trouvé. Rejoins ou crée un foyer."}
           </p>
         ) : (
           <ul className="family-settings-member-badges">
