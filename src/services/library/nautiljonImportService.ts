@@ -11,6 +11,8 @@ export type NautiljonImportEnvelope = {
 export type ReadingImportTarget = {
   id: string;
   malMangaId: number;
+  /** Présent si la fiche est liée AniList (y compris sans MAL). */
+  anilistMediaId: number | null;
   /** Titre affiché (aligné sur la fiche détail / collection : VF, puis Jikan, puis colonne title). */
   title: string;
 };
@@ -102,16 +104,21 @@ function normalizeVolumes(value: unknown): NautiljonVolumePayload[] {
 export async function fetchReadingImportTargets(supabase: SupabaseClient): Promise<ReadingImportTarget[]> {
   const { data, error } = await supabase
     .from("library_reading")
-    .select("id, mal_manga_id, title, mal_official_snapshot, jikan_snapshot")
+    .select("id, mal_manga_id, anilist_media_id, title, mal_official_snapshot, jikan_snapshot")
     .order("updated_at", { ascending: false });
   if (error) {
     throw new Error(error.message);
   }
-  const mapped = (data ?? []).map((row) => ({
-    id: String((row as { id: unknown }).id),
-    malMangaId: Number((row as { mal_manga_id?: unknown }).mal_manga_id ?? 0),
-    title: resolveReadingRowDisplayTitle(row as Record<string, unknown>),
-  }));
+  const mapped = (data ?? []).map((row) => {
+    const aniRaw = (row as { anilist_media_id?: unknown }).anilist_media_id;
+    const ani = aniRaw != null && Number.isFinite(Number(aniRaw)) && Number(aniRaw) > 0 ? Number(aniRaw) : null;
+    return {
+      id: String((row as { id: unknown }).id),
+      malMangaId: Number((row as { mal_manga_id?: unknown }).mal_manga_id ?? 0),
+      anilistMediaId: ani,
+      title: resolveReadingRowDisplayTitle(row as Record<string, unknown>),
+    };
+  });
   mapped.sort((a, b) => a.title.localeCompare(b.title, "fr", { sensitivity: "base" }));
   return mapped;
 }
@@ -124,16 +131,20 @@ export async function applyNautiljonImportToReading(
 ): Promise<{ volumesUpserted: number }> {
   const { data: existingRow, error: existingError } = await supabase
     .from("library_reading")
-    .select("id, mal_manga_id, title, mal_official_snapshot, jikan_snapshot")
+    .select("id, mal_manga_id, anilist_media_id, title, mal_official_snapshot, jikan_snapshot")
     .eq("id", targetReadingId)
     .single();
   if (existingError || !existingRow) {
     throw new Error(existingError?.message ?? "Fiche lecture introuvable.");
   }
   const malMangaId = Number((existingRow as { mal_manga_id?: unknown }).mal_manga_id ?? 0);
-  if (!Number.isFinite(malMangaId) || malMangaId <= 0) {
-    throw new Error("mal_manga_id manquant sur la fiche lecture.");
-  }
+  const anilistMediaIdRaw = (existingRow as { anilist_media_id?: unknown }).anilist_media_id;
+  const anilistMediaId =
+    anilistMediaIdRaw != null && Number.isFinite(Number(anilistMediaIdRaw)) && Number(anilistMediaIdRaw) > 0
+      ? Number(anilistMediaIdRaw)
+      : 0;
+  const hasMalCatalog = Number.isFinite(malMangaId) && malMangaId > 0;
+  const hasAnilistCatalog = !hasMalCatalog && Number.isFinite(anilistMediaId) && anilistMediaId > 0;
 
   const payload = envelope.payload;
   const baseMalSnapshot = ((existingRow.mal_official_snapshot ?? {}) as Record<string, unknown>);
@@ -245,27 +256,29 @@ export async function applyNautiljonImportToReading(
   const familyId = options?.familyId ?? null;
   const payloadVolumes = normalizeVolumes(payload.volumes);
   let volumesUpserted = 0;
-  for (const rawVolume of payloadVolumes) {
-    const volumeNumber = toNumberValue(rawVolume.numero);
-    if (!volumeNumber || volumeNumber <= 0) {
-      continue;
+  if (hasMalCatalog || hasAnilistCatalog) {
+    for (const rawVolume of payloadVolumes) {
+      const volumeNumber = toNumberValue(rawVolume.numero);
+      if (!volumeNumber || volumeNumber <= 0) {
+        continue;
+      }
+      await upsertReadingVolume(supabase, {
+        readingId: targetReadingId,
+        ...(hasMalCatalog ? { malMangaId: malMangaId } : { anilistMediaId: anilistMediaId }),
+        familyId,
+        volumeNumber,
+        volumeType: toStringValue(payload.type_volume) || "standard",
+        imageUrl: toStringValue(rawVolume.couverture_url) || null,
+        releaseDateVf: normalizeDate(rawVolume.date_sortie),
+        purchaseDate: null,
+        priceEuros: toNumberValue(rawVolume.prix) ?? 0,
+        isOwned: false,
+        isRead: false,
+        isMihon: false,
+        owners: [],
+      });
+      volumesUpserted += 1;
     }
-    await upsertReadingVolume(supabase, {
-      readingId: targetReadingId,
-      malMangaId,
-      familyId,
-      volumeNumber,
-      volumeType: toStringValue(payload.type_volume) || "standard",
-      imageUrl: toStringValue(rawVolume.couverture_url) || null,
-      releaseDateVf: normalizeDate(rawVolume.date_sortie),
-      purchaseDate: null,
-      priceEuros: toNumberValue(rawVolume.prix) ?? 0,
-      isOwned: false,
-      isRead: false,
-      isMihon: false,
-      owners: [],
-    });
-    volumesUpserted += 1;
   }
 
   return { volumesUpserted };

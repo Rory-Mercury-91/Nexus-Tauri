@@ -37,6 +37,7 @@ import { isMalSyntheticId } from "@/lib/malSyntheticIds";
 import { buildReadingSyncDiffFields } from "@/services/library/syncDiffService";
 import { translateLibraryTerm, translateLibraryTerms } from "@/services/library/termTranslations";
 import { scrollMainToTop } from "@/lib/collectionScroll";
+import { collectRelatedIdsFromSnapshots } from "@/lib/libraryRelationSnapshots";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
 import { formatPeriodeFr } from "@/lib/dateUtils";
 import "./LibraryPages.css";
@@ -45,7 +46,9 @@ import "./ReadingDetailPage.css";
 
 type FranchiseDbEntry = {
   media: "reading" | "anime";
+  rowId: string;
   malId: number;
+  anilistMediaId: number | null;
   title: string;
   status: string;
   progressLabel: string;
@@ -122,49 +125,24 @@ function mapWatchStatusToFr(raw: string | null): string {
   }
 }
 
-function collectRelatedIdsFromSnapshots(
-  jikanSnapshot: Record<string, unknown>,
-  malSnapshot: Record<string, unknown>,
-  animeIds: Set<number>,
-  readingIds: Set<number>
-) {
-  const full = (jikanSnapshot.full ?? jikanSnapshot.data ?? {}) as Record<string, unknown>;
-  const jikanRelations = Array.isArray(full.relations) ? (full.relations as Array<Record<string, unknown>>) : [];
-  jikanRelations.forEach((relation) => {
-    const entries = Array.isArray(relation.entry) ? (relation.entry as Array<Record<string, unknown>>) : [];
-    entries.forEach((entry) => {
-      const entryId = Number(entry.mal_id);
-      if (!Number.isFinite(entryId) || entryId <= 0) {
-        return;
-      }
-      const entryType = String(entry.type ?? "").toLowerCase();
-      if (entryType === "anime") {
-        animeIds.add(entryId);
-      } else if (entryType === "manga") {
-        readingIds.add(entryId);
-      }
-    });
-  });
+function franchiseReadingDetailPath(entry: FranchiseDbEntry): string {
+  if (entry.malId > 0) {
+    return `/lectures/${entry.malId}`;
+  }
+  if (entry.anilistMediaId != null && entry.anilistMediaId > 0) {
+    return `/lectures/anilist/${entry.anilistMediaId}`;
+  }
+  return `/lectures/${entry.rowId}`;
+}
 
-  const malRelatedAnime = Array.isArray(malSnapshot.related_anime)
-    ? (malSnapshot.related_anime as Array<{ node?: { id?: unknown } }>)
-    : [];
-  malRelatedAnime.forEach((relation) => {
-    const entryId = Number(relation.node?.id);
-    if (Number.isFinite(entryId) && entryId > 0) {
-      animeIds.add(entryId);
-    }
-  });
-
-  const malRelatedManga = Array.isArray(malSnapshot.related_manga)
-    ? (malSnapshot.related_manga as Array<{ node?: { id?: unknown } }>)
-    : [];
-  malRelatedManga.forEach((relation) => {
-    const entryId = Number(relation.node?.id);
-    if (Number.isFinite(entryId) && entryId > 0) {
-      readingIds.add(entryId);
-    }
-  });
+function franchiseAnimeLink(entry: FranchiseDbEntry): { to?: string; href?: string } {
+  if (entry.malId > 0) {
+    return { to: `/anime/${entry.malId}` };
+  }
+  if (entry.anilistMediaId != null && entry.anilistMediaId > 0) {
+    return { href: `https://anilist.co/anime/${entry.anilistMediaId}` };
+  }
+  return { to: `/anime/${entry.rowId}` };
 }
 
 function getLockedFieldIdsFromSnapshot(snapshot: Record<string, unknown> | null): string[] {
@@ -199,7 +177,7 @@ function mapReadStatusToDb(raw: string): string {
 }
 
 export function ReadingDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, anilistId } = useParams<{ id?: string; anilistId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const detailState = (location.state as {
@@ -216,10 +194,28 @@ export function ReadingDetailPage() {
           collectionViewMode: detailState.collectionViewMode,
         }
       : undefined;
+  const anilistMediaIdRoute = useMemo(() => {
+    const n = Number(anilistId);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [anilistId]);
+
+  const rowIdFromRoute = useMemo(() => {
+    if (anilistId || !id) {
+      return null;
+    }
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return id;
+    }
+    return null;
+  }, [id, anilistId]);
+
   const malId = useMemo(() => {
+    if (anilistMediaIdRoute != null || rowIdFromRoute) {
+      return null;
+    }
     const n = Number(id);
     return Number.isFinite(n) && n > 0 ? n : null;
-  }, [id]);
+  }, [id, anilistMediaIdRoute, rowIdFromRoute]);
 
   useLayoutEffect(() => {
     scrollMainToTop();
@@ -290,6 +286,31 @@ export function ReadingDetailPage() {
     }
     return n;
   }, [effectiveMalMangaId]);
+
+  /** Clé catalogue tomes VF : MAL si présent, sinon AniList (fiche DB ou segment d’URL). */
+  const volumeCatalogUpsertKeys = useMemo((): { malMangaId?: number; anilistMediaId?: number } | null => {
+    const fromDbMal = Number((rawDbRow as { mal_manga_id?: unknown } | null)?.mal_manga_id ?? 0);
+    const fromDbAni = Number((rawDbRow as { anilist_media_id?: unknown } | null)?.anilist_media_id ?? 0);
+    const mal =
+      Number.isFinite(fromDbMal) && fromDbMal > 0
+        ? fromDbMal
+        : malId != null && malId > 0
+          ? malId
+          : 0;
+    const ani =
+      Number.isFinite(fromDbAni) && fromDbAni > 0
+        ? fromDbAni
+        : anilistMediaIdRoute != null && anilistMediaIdRoute > 0
+          ? anilistMediaIdRoute
+          : 0;
+    if (mal > 0) {
+      return { malMangaId: mal };
+    }
+    if (ani > 0) {
+      return { anilistMediaId: ani };
+    }
+    return null;
+  }, [rawDbRow, malId, anilistMediaIdRoute]);
 
   useEffect(() => {
     let cancelled = false;
@@ -762,15 +783,26 @@ export function ReadingDetailPage() {
   }
 
   const loadReadingDbRow = useCallback(async () => {
-    if (!malId) {
+    if (!malId && !anilistMediaIdRoute && !rowIdFromRoute) {
       return;
     }
     const supabase = getSupabaseClient();
-    const { data } = await supabase
-      .from("library_reading")
-      .select("*")
-      .eq("mal_manga_id", malId)
-      .maybeSingle();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userId = user?.id ?? "";
+    if (!userId) {
+      return;
+    }
+    let query = supabase.from("library_reading").select("*").eq("user_id", userId);
+    if (malId != null) {
+      query = query.eq("mal_manga_id", malId);
+    } else if (anilistMediaIdRoute != null) {
+      query = query.eq("anilist_media_id", anilistMediaIdRoute);
+    } else if (rowIdFromRoute) {
+      query = query.eq("id", rowIdFromRoute);
+    }
+    const { data } = await query.maybeSingle();
     if (!data) {
       return;
     }
@@ -787,62 +819,124 @@ export function ReadingDetailPage() {
     setChaptersRead(Number.isFinite(nextChaptersRead) ? Math.max(0, nextChaptersRead) : 0);
     setVolumesRead(Number.isFinite(nextVolumesRead) ? Math.max(0, nextVolumesRead) : 0);
     setUserFavorite(Boolean(listStatus.is_favorite ?? false));
-    const relatedReadingIds = new Set<number>();
-    const relatedAnimeIds = new Set<number>();
-    collectRelatedIdsFromSnapshots(rawJikanSnapshot, rawMalSnapshot, relatedAnimeIds, relatedReadingIds);
+    const relatedReadingMalIds = new Set<number>();
+    const relatedAnimeMalIds = new Set<number>();
+    const relatedReadingAnilistIds = new Set<number>();
+    const relatedAnimeAnilistIds = new Set<number>();
+    const relatedIdOpts = {
+      animeAnilistIds: relatedAnimeAnilistIds,
+      readingAnilistIds: relatedReadingAnilistIds,
+    };
+    collectRelatedIdsFromSnapshots(rawJikanSnapshot, rawMalSnapshot, relatedAnimeMalIds, relatedReadingMalIds, relatedIdOpts);
 
     // Étend d'un niveau pour éviter les franchises incomplètes selon la fiche ouverte.
-    if (relatedAnimeIds.size > 0) {
-      const { data: expandAnimeRows } = await supabase
-        .from("library_anime")
-        .select("jikan_snapshot, mal_official_snapshot")
-        .in("mal_id", Array.from(relatedAnimeIds));
-      (expandAnimeRows ?? []).forEach((row) => {
+    if (relatedAnimeMalIds.size > 0 || relatedAnimeAnilistIds.size > 0) {
+      const expandChunks: Array<{ jikan_snapshot?: unknown; mal_official_snapshot?: unknown }> = [];
+      if (relatedAnimeMalIds.size > 0) {
+        const { data: expandAnimeMal } = await supabase
+          .from("library_anime")
+          .select("jikan_snapshot, mal_official_snapshot")
+          .eq("user_id", userId)
+          .in("mal_id", Array.from(relatedAnimeMalIds));
+        expandChunks.push(...(expandAnimeMal ?? []));
+      }
+      if (relatedAnimeAnilistIds.size > 0) {
+        const { data: expandAnimeAni } = await supabase
+          .from("library_anime")
+          .select("jikan_snapshot, mal_official_snapshot")
+          .eq("user_id", userId)
+          .in("anilist_media_id", Array.from(relatedAnimeAnilistIds));
+        expandChunks.push(...(expandAnimeAni ?? []));
+      }
+      expandChunks.forEach((row) => {
         collectRelatedIdsFromSnapshots(
           ((row as { jikan_snapshot?: unknown }).jikan_snapshot ?? {}) as Record<string, unknown>,
           ((row as { mal_official_snapshot?: unknown }).mal_official_snapshot ?? {}) as Record<string, unknown>,
-          relatedAnimeIds,
-          relatedReadingIds
+          relatedAnimeMalIds,
+          relatedReadingMalIds,
+          relatedIdOpts
         );
       });
     }
-    if (relatedReadingIds.size > 0) {
-      const { data: expandReadingRows } = await supabase
-        .from("library_reading")
-        .select("jikan_snapshot, mal_official_snapshot")
-        .in("mal_manga_id", Array.from(relatedReadingIds));
-      (expandReadingRows ?? []).forEach((row) => {
+    if (relatedReadingMalIds.size > 0 || relatedReadingAnilistIds.size > 0) {
+      const expandChunks: Array<{ jikan_snapshot?: unknown; mal_official_snapshot?: unknown }> = [];
+      if (relatedReadingMalIds.size > 0) {
+        const { data: expandReadingMal } = await supabase
+          .from("library_reading")
+          .select("jikan_snapshot, mal_official_snapshot")
+          .eq("user_id", userId)
+          .in("mal_manga_id", Array.from(relatedReadingMalIds));
+        expandChunks.push(...(expandReadingMal ?? []));
+      }
+      if (relatedReadingAnilistIds.size > 0) {
+        const { data: expandReadingAni } = await supabase
+          .from("library_reading")
+          .select("jikan_snapshot, mal_official_snapshot")
+          .eq("user_id", userId)
+          .in("anilist_media_id", Array.from(relatedReadingAnilistIds));
+        expandChunks.push(...(expandReadingAni ?? []));
+      }
+      expandChunks.forEach((row) => {
         collectRelatedIdsFromSnapshots(
           ((row as { jikan_snapshot?: unknown }).jikan_snapshot ?? {}) as Record<string, unknown>,
           ((row as { mal_official_snapshot?: unknown }).mal_official_snapshot ?? {}) as Record<string, unknown>,
-          relatedAnimeIds,
-          relatedReadingIds
+          relatedAnimeMalIds,
+          relatedReadingMalIds,
+          relatedIdOpts
         );
       });
     }
 
     const nextEntries: FranchiseDbEntry[] = [];
-    if (relatedReadingIds.size > 0) {
-      const { data: readingRows } = await supabase
-        .from("library_reading")
-        .select("mal_manga_id, title, main_picture_url, read_status, mal_official_snapshot, jikan_snapshot")
-        .in("mal_manga_id", Array.from(relatedReadingIds));
-      (readingRows ?? []).forEach((row) => {
+    const readingFranchiseById = new Map<string, FranchiseDbEntry>();
+    if (relatedReadingMalIds.size > 0 || relatedReadingAnilistIds.size > 0) {
+      const readingChunks: Array<Record<string, unknown>> = [];
+      if (relatedReadingMalIds.size > 0) {
+        const { data: readingRowsMal } = await supabase
+          .from("library_reading")
+          .select(
+            "id, mal_manga_id, anilist_media_id, title, main_picture_url, read_status, mal_official_snapshot, jikan_snapshot"
+          )
+          .eq("user_id", userId)
+          .in("mal_manga_id", Array.from(relatedReadingMalIds));
+        readingChunks.push(...((readingRowsMal ?? []) as Record<string, unknown>[]));
+      }
+      if (relatedReadingAnilistIds.size > 0) {
+        const { data: readingRowsAni } = await supabase
+          .from("library_reading")
+          .select(
+            "id, mal_manga_id, anilist_media_id, title, main_picture_url, read_status, mal_official_snapshot, jikan_snapshot"
+          )
+          .eq("user_id", userId)
+          .in("anilist_media_id", Array.from(relatedReadingAnilistIds));
+        readingChunks.push(...((readingRowsAni ?? []) as Record<string, unknown>[]));
+      }
+      readingChunks.forEach((row) => {
+        const rowId = String(row.id ?? "");
+        if (!rowId) {
+          return;
+        }
         const rowMalSnapshot = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
         const rowJikanSnapshot = (row.jikan_snapshot ?? {}) as Record<string, unknown>;
-        const rowFullSnapshot = (rowJikanSnapshot.full ?? {}) as Record<string, unknown>;
+        const rowFullSnapshot = (rowJikanSnapshot.full ?? rowJikanSnapshot.data ?? {}) as Record<string, unknown>;
         const rowListEntry = (rowMalSnapshot.list_entry ?? {}) as Record<string, unknown>;
         const rowListStatus = (rowListEntry.list_status ?? {}) as Record<string, unknown>;
         const chaptersReadSnapshot = Number(rowListStatus.num_chapters_read ?? 0);
         const chaptersTotalSnapshot = Number(rowFullSnapshot.chapters ?? 0);
-        nextEntries.push({
+        const malMid = Number(row.mal_manga_id ?? 0);
+        const aniMidRaw = row.anilist_media_id;
+        const aniMid =
+          aniMidRaw != null && Number.isFinite(Number(aniMidRaw)) && Number(aniMidRaw) > 0 ? Number(aniMidRaw) : null;
+        readingFranchiseById.set(rowId, {
           media: "reading",
-          malId: Number(row.mal_manga_id),
-          title: String(row.title ?? `Manga #${row.mal_manga_id}`),
+          rowId,
+          malId: Number.isFinite(malMid) && malMid > 0 ? malMid : 0,
+          anilistMediaId: aniMid,
+          title: String(row.title ?? (malMid > 0 ? `Manga #${malMid}` : aniMid ? `AniList ${aniMid}` : "—")),
           status: mapReadStatusToFr((row.read_status as string | null) ?? null),
           progressLabel: `${Number.isFinite(chaptersReadSnapshot) ? chaptersReadSnapshot : 0}/${Number.isFinite(chaptersTotalSnapshot) ? chaptersTotalSnapshot : 0} ch.`,
           imageUrl: String(
-            (row as { main_picture_url?: string | null }).main_picture_url ??
+            (row.main_picture_url as string | null | undefined) ??
               ((rowFullSnapshot.images as Record<string, unknown> | undefined)?.jpg as Record<string, unknown> | undefined)
                 ?.large_image_url ??
               ((rowFullSnapshot.images as Record<string, unknown> | undefined)?.jpg as Record<string, unknown> | undefined)
@@ -851,28 +945,53 @@ export function ReadingDetailPage() {
           ),
         });
       });
+      readingFranchiseById.forEach((v) => nextEntries.push(v));
     }
-    if (relatedAnimeIds.size > 0) {
-      const { data: animeRows } = await supabase
-        .from("library_anime")
-        .select("mal_id, title, main_picture_url, watch_status, mal_official_snapshot, jikan_snapshot")
-        .in("mal_id", Array.from(relatedAnimeIds));
-      (animeRows ?? []).forEach((row) => {
+    if (relatedAnimeMalIds.size > 0 || relatedAnimeAnilistIds.size > 0) {
+      const animeChunks: Array<Record<string, unknown>> = [];
+      if (relatedAnimeMalIds.size > 0) {
+        const { data: animeRowsMal } = await supabase
+          .from("library_anime")
+          .select("id, mal_id, anilist_media_id, title, main_picture_url, watch_status, mal_official_snapshot, jikan_snapshot")
+          .eq("user_id", userId)
+          .in("mal_id", Array.from(relatedAnimeMalIds));
+        animeChunks.push(...((animeRowsMal ?? []) as Record<string, unknown>[]));
+      }
+      if (relatedAnimeAnilistIds.size > 0) {
+        const { data: animeRowsAni } = await supabase
+          .from("library_anime")
+          .select("id, mal_id, anilist_media_id, title, main_picture_url, watch_status, mal_official_snapshot, jikan_snapshot")
+          .eq("user_id", userId)
+          .in("anilist_media_id", Array.from(relatedAnimeAnilistIds));
+        animeChunks.push(...((animeRowsAni ?? []) as Record<string, unknown>[]));
+      }
+      const animeFranchiseById = new Map<string, FranchiseDbEntry>();
+      animeChunks.forEach((row) => {
+        const rowId = String(row.id ?? "");
+        if (!rowId) {
+          return;
+        }
         const rowMalSnapshot = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
         const rowJikanSnapshot = (row.jikan_snapshot ?? {}) as Record<string, unknown>;
-        const rowFullSnapshot = (rowJikanSnapshot.full ?? {}) as Record<string, unknown>;
+        const rowFullSnapshot = (rowJikanSnapshot.full ?? rowJikanSnapshot.data ?? {}) as Record<string, unknown>;
         const rowListEntry = (rowMalSnapshot.list_entry ?? {}) as Record<string, unknown>;
         const rowListStatus = (rowListEntry.list_status ?? {}) as Record<string, unknown>;
         const episodesSeenSnapshot = Number(rowListStatus.num_episodes_watched ?? 0);
         const episodesTotalSnapshot = Number(rowFullSnapshot.episodes ?? 0);
-        nextEntries.push({
+        const malAid = Number(row.mal_id ?? 0);
+        const aniAidRaw = row.anilist_media_id;
+        const aniAid =
+          aniAidRaw != null && Number.isFinite(Number(aniAidRaw)) && Number(aniAidRaw) > 0 ? Number(aniAidRaw) : null;
+        animeFranchiseById.set(rowId, {
           media: "anime",
-          malId: Number(row.mal_id),
-          title: String(row.title ?? `Anime #${row.mal_id}`),
+          rowId,
+          malId: Number.isFinite(malAid) && malAid > 0 ? malAid : 0,
+          anilistMediaId: aniAid,
+          title: String(row.title ?? (malAid > 0 ? `Anime #${malAid}` : aniAid ? `AniList ${aniAid}` : "—")),
           status: mapWatchStatusToFr((row.watch_status as string | null) ?? null),
           progressLabel: `${Number.isFinite(episodesSeenSnapshot) ? episodesSeenSnapshot : 0}/${Number.isFinite(episodesTotalSnapshot) ? episodesTotalSnapshot : 0} ép.`,
           imageUrl: String(
-            (row as { main_picture_url?: string | null }).main_picture_url ??
+            (row.main_picture_url as string | null | undefined) ??
               ((rowFullSnapshot.images as Record<string, unknown> | undefined)?.jpg as Record<string, unknown> | undefined)
                 ?.large_image_url ??
               ((rowFullSnapshot.images as Record<string, unknown> | undefined)?.jpg as Record<string, unknown> | undefined)
@@ -881,6 +1000,7 @@ export function ReadingDetailPage() {
           ),
         });
       });
+      animeFranchiseById.forEach((v) => nextEntries.push(v));
     }
     setFranchiseEntries(
       nextEntries.sort((a, b) => {
@@ -890,7 +1010,7 @@ export function ReadingDetailPage() {
         return a.title.localeCompare(b.title);
       })
     );
-  }, [malId]);
+  }, [malId, anilistMediaIdRoute, rowIdFromRoute]);
 
   const loadReadingLivePayload = useCallback(async () => {
     if (!malId) {
@@ -975,12 +1095,12 @@ export function ReadingDetailPage() {
       const ownerCount = Math.max(1, ownerIds.length);
       const share = Number((editingVolume.priceEuros / ownerCount).toFixed(2));
       const resolvedFamilyId = familyId ?? volumeByNumber.get(editingVolume.volumeNumber)?.familyId ?? null;
-      if (!malId) {
-        throw new Error("MAL manga id manquant.");
+      if (!volumeCatalogUpsertKeys) {
+        throw new Error("Identifiant catalogue tomes manquant (MAL ou AniList).");
       }
       await upsertReadingVolume(supabase, {
         readingId: readingRowId,
-        malMangaId: malId,
+        ...volumeCatalogUpsertKeys,
         familyId: resolvedFamilyId,
         volumeNumber: editingVolume.volumeNumber,
         volumeType: editingVolume.volumeType,
@@ -1043,12 +1163,12 @@ export function ReadingDetailPage() {
         const share = Number((vol.priceEuros / ownerCount).toFixed(2));
         const owners = propagateOwnersDraft.ownerIds.map((id) => ({ userId: id, shareEuros: share }));
         const resolvedFamilyId = familyId ?? vol.familyId ?? null;
-        if (!malId) {
-          throw new Error("MAL manga id manquant.");
+        if (!volumeCatalogUpsertKeys) {
+          throw new Error("Identifiant catalogue tomes manquant (MAL ou AniList).");
         }
         await upsertReadingVolume(supabase, {
           readingId: readingRowId,
-          malMangaId: malId,
+          ...volumeCatalogUpsertKeys,
           familyId: resolvedFamilyId,
           volumeNumber: vol.volumeNumber,
           volumeType: vol.volumeType,
@@ -1131,12 +1251,12 @@ export function ReadingDetailPage() {
         }
         
         const resolvedFamilyId = familyId ?? volume.familyId ?? null;
-        if (!malId) {
-          throw new Error("MAL manga id manquant.");
+        if (!volumeCatalogUpsertKeys) {
+          throw new Error("Identifiant catalogue tomes manquant (MAL ou AniList).");
         }
         await upsertReadingVolume(supabase, {
           readingId: volume.readingId,
-          malMangaId: malId,
+          ...volumeCatalogUpsertKeys,
           familyId: resolvedFamilyId,
           volumeNumber: volume.volumeNumber,
           volumeType: volume.volumeType,
@@ -1237,12 +1357,12 @@ export function ReadingDetailPage() {
       }
       
       const resolvedFamilyId = familyId ?? current.familyId ?? null;
-      if (!malId) {
-        throw new Error("MAL manga id manquant.");
+      if (!volumeCatalogUpsertKeys) {
+        throw new Error("Identifiant catalogue tomes manquant (MAL ou AniList).");
       }
       await upsertReadingVolume(supabase, {
         readingId: current.readingId,
-        malMangaId: malId,
+        ...volumeCatalogUpsertKeys,
         familyId: resolvedFamilyId,
         volumeNumber: current.volumeNumber,
         volumeType: current.volumeType,
@@ -1277,7 +1397,7 @@ export function ReadingDetailPage() {
   }, [collapseVolumes]);
 
   useEffect(() => {
-    if (!malId) {
+    if (!malId && !anilistMediaIdRoute && !rowIdFromRoute) {
       return;
     }
     let cancelled = false;
@@ -1294,7 +1414,7 @@ export function ReadingDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadReadingDbRow, malId]);
+  }, [loadReadingDbRow, malId, anilistMediaIdRoute, rowIdFromRoute]);
 
   useEffect(() => {
     if (readingView.liveChapters > 0) {
@@ -1902,8 +2022,8 @@ export function ReadingDetailPage() {
         onSave={() => void saveEditedReadingEntry()}
       />
 
-      {!malId ? (
-        <p className="library-page-lead">Identifiant d’URL invalide (attendu : MAL id numérique).</p>
+      {!malId && !anilistMediaIdRoute && !rowIdFromRoute ? (
+        <p className="library-page-lead">Identifiant d’URL invalide (MAL, AniList ou id de fiche attendu).</p>
       ) : null}
 
       <section className="anime-detail-section reading-overview-layout">
@@ -2034,15 +2154,45 @@ export function ReadingDetailPage() {
           <LibraryGeneralInfoGrid items={generalInfoItems} />
           <LibraryFranchiseSection
             items={franchiseEntries
-              .filter((entry) => !(entry.media === "reading" && entry.malId === malId))
-              .map((entry) => ({
-                key: `${entry.media}-${entry.malId}`,
-                to: entry.media === "anime" ? `/anime/${entry.malId}` : `/lectures/${entry.malId}`,
-                title: entry.title,
-                meta: `${entry.media === "anime" ? "Adaptation animé" : "Lecture"} • ${entry.status} • ${entry.progressLabel}`,
-                isCurrent: entry.media === "reading" && entry.malId === malId,
-                imageUrl: entry.imageUrl,
-              }))}
+              .filter((entry) => {
+                if (entry.media !== "reading") {
+                  return true;
+                }
+                const malHit =
+                  effectiveMalMangaId != null &&
+                  entry.malId > 0 &&
+                  entry.malId === effectiveMalMangaId;
+                const aniHit =
+                  anilistMediaIdRoute != null &&
+                  entry.anilistMediaId != null &&
+                  entry.anilistMediaId > 0 &&
+                  entry.anilistMediaId === anilistMediaIdRoute;
+                const rowHit = readingRowId != null && entry.rowId === readingRowId;
+                return !(malHit || aniHit || rowHit);
+              })
+              .map((entry) => {
+                const base = {
+                  key: `${entry.media}-${entry.rowId}`,
+                  title: entry.title,
+                  meta: `${entry.media === "anime" ? "Adaptation animé" : "Lecture"} • ${entry.status} • ${entry.progressLabel}`,
+                  isCurrent:
+                    entry.media === "reading" &&
+                    ((effectiveMalMangaId != null &&
+                      entry.malId > 0 &&
+                      entry.malId === effectiveMalMangaId) ||
+                      (anilistMediaIdRoute != null &&
+                        entry.anilistMediaId != null &&
+                        entry.anilistMediaId > 0 &&
+                        entry.anilistMediaId === anilistMediaIdRoute) ||
+                      (readingRowId != null && entry.rowId === readingRowId)),
+                  imageUrl: entry.imageUrl,
+                };
+                if (entry.media === "anime") {
+                  const { to, href } = franchiseAnimeLink(entry);
+                  return href ? { ...base, href } : { ...base, to: to ?? "#" };
+                }
+                return { ...base, to: franchiseReadingDetailPath(entry) };
+              })}
           />
           <LibraryMediaGallery
             images={galleryImages}

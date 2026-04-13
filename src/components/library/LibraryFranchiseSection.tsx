@@ -2,7 +2,10 @@ import { Link } from "react-router-dom";
 
 export type LibraryFranchiseItem = {
   key: string;
-  to: string;
+  /** Lien interne SPA (prioritaire si défini avec `href` absent). */
+  to?: string;
+  /** Lien externe (ex. fiche AniList quand la route Nexus animé n’existe pas encore). */
+  href?: string;
   title: string;
   meta: string;
   isCurrent?: boolean;
@@ -23,9 +26,10 @@ export function LibraryFranchiseSection({ items }: LibraryFranchiseSectionProps)
     <div className="anime-detail-subsection">
       <h3 className="anime-detail-subtitle-heading">Franchise liée</h3>
       <ul className="anime-detail-franchise-list">
-        {items.map((entry) => (
-          <li key={entry.key}>
-            <Link to={entry.to} className={`anime-detail-franchise-link${entry.isCurrent ? " is-current" : ""}`}>
+        {items.map((entry) => {
+          const className = `anime-detail-franchise-link${entry.isCurrent ? " is-current" : ""}`;
+          const inner = (
+            <>
               {entry.imageUrl ? (
                 <img className="anime-detail-franchise-thumb" src={entry.imageUrl} alt="" loading="lazy" />
               ) : (
@@ -36,9 +40,22 @@ export function LibraryFranchiseSection({ items }: LibraryFranchiseSectionProps)
                 <span className="anime-detail-franchise-title">{entry.title}</span>
                 <span className="anime-detail-franchise-meta">{entry.meta}</span>
               </span>
-            </Link>
-          </li>
-        ))}
+            </>
+          );
+          return (
+            <li key={entry.key}>
+              {entry.href ? (
+                <a href={entry.href} className={className} rel="noopener noreferrer" target="_blank">
+                  {inner}
+                </a>
+              ) : (
+                <Link to={entry.to ?? "#"} className={className}>
+                  {inner}
+                </Link>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

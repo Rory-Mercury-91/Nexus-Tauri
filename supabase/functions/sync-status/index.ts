@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     const { data: activeRun, error: activeErr } = await admin
       .from("sync_runs")
       .select(
-        "id, source, media_type, status, current_stage, created_at, started_at, finished_at, error_message"
+        "id, source, media_type, status, current_stage, created_at, started_at, finished_at, error_message, import_report"
       )
       .eq("user_id", userId)
       .eq("media_type", mediaType)
@@ -53,7 +53,7 @@ Deno.serve(async (req) => {
     const { data: recentRuns, error: recentErr } = await admin
       .from("sync_runs")
       .select(
-        "id, source, media_type, status, current_stage, created_at, started_at, finished_at, error_message"
+        "id, source, media_type, status, current_stage, created_at, started_at, finished_at, error_message, import_report"
       )
       .eq("user_id", userId)
       .eq("media_type", mediaType)

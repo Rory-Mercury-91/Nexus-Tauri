@@ -39,7 +39,10 @@ function AppRoutes() {
     location.pathname === "/register" ||
     location.pathname.startsWith("/auth/");
   const isAnimeDetail = /^\/anime\/\d+/.test(location.pathname);
-  const isReadingDetail = /^\/lectures\/\d+/.test(location.pathname);
+  const isReadingDetail =
+    /^\/lectures\/\d+/.test(location.pathname) ||
+    /^\/lectures\/anilist\/\d+/.test(location.pathname) ||
+    /^\/lectures\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(location.pathname);
   const renderAnimeSection = location.pathname === "/anime" || isAnimeDetail;
   const renderReadingSection = location.pathname === "/lectures" || isReadingDetail;
   /** Prêt à afficher l’app : session connue + premier chargement profil terminé si connecté. */
@@ -186,6 +189,7 @@ function AppRoutes() {
             <Route path="/anime" element={null} />
             <Route path="/anime/:id" element={<AnimeDetailPage />} />
             <Route path="/lectures" element={null} />
+            <Route path="/lectures/anilist/:anilistId" element={<ReadingDetailPage />} />
             <Route path="/lectures/:id" element={<ReadingDetailPage />} />
             <Route path="/subscriptions" element={<SubscriptionsPage />} />
             <Route path="/login" element={<LoginPage />} />

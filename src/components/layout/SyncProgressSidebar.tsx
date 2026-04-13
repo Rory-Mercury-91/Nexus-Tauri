@@ -11,8 +11,8 @@ import {
 } from "@/services/library/syncService";
 import "./SyncProgressSidebar.css";
 
-/** Aucune étape (sync_progress) n’a bougé depuis ce délai → alerte (global, pas par ligne). */
-const STALL_AFTER_MS = 120_000;
+/** Aucune étape (sync_progress) n’a bougé depuis ce délai → alerte (aligné ~reprise worker côté serveur). */
+const STALL_AFTER_MS = 180_000;
 
 function percentage(processed: number, total: number): number {
   if (total <= 0) {

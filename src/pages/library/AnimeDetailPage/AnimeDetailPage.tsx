@@ -4,6 +4,7 @@ import { useAnimeDetailFromDb, type FranchiseDetailEntry } from "@/hooks/useAnim
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { buildAnimeDetailResolvedFields } from "@/services/library/animeDetailViewModel";
 import { updateAnimeWatchStatus } from "@/services/library/animeCollectionService";
+import { readingEntryDetailPath } from "@/services/library/readingCollectionService";
 import { deleteAnimeEntry } from "@/services/library/animeCollectionService";
 import { removeFromExternalList } from "@/services/library/externalReadingListDeleteService";
 import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
@@ -1103,15 +1104,36 @@ function AnimeDetailBody({
             <LibraryFranchiseSection
               items={franchiseEntries
                 .filter((entry) => !(entry.media === "anime" && entry.malId === anime.mal_id))
-                .map((entry) => ({
-                  key: `${entry.media}-${entry.malId}`,
-                  to: entry.media === "anime" ? `/anime/${entry.malId}` : `/lectures/${entry.malId}`,
-                  title: entry.title,
-                  meta: `${entry.statusLabel} • ${entry.progressLabel}`,
-                  isCurrent: entry.media === "anime" && entry.malId === anime.mal_id,
-                  isFavorite: entry.isFavorite,
-                  imageUrl: entry.imageUrl,
-                }))}
+                .map((entry) => {
+                  const base = {
+                    key: `${entry.media}-${entry.rowId}`,
+                    title: entry.title,
+                    meta: `${entry.statusLabel} • ${entry.progressLabel}`,
+                    isCurrent: entry.media === "anime" && entry.malId === anime.mal_id,
+                    isFavorite: entry.isFavorite,
+                    imageUrl: entry.imageUrl,
+                  };
+                  if (entry.media === "anime") {
+                    if (entry.malId > 0) {
+                      return { ...base, to: `/anime/${entry.malId}` };
+                    }
+                    if (entry.anilistMediaId != null && entry.anilistMediaId > 0) {
+                      return {
+                        ...base,
+                        href: `https://anilist.co/anime/${entry.anilistMediaId}`,
+                      };
+                    }
+                    return { ...base, to: `/anime/${entry.rowId}` };
+                  }
+                  return {
+                    ...base,
+                    to: readingEntryDetailPath({
+                      id: entry.rowId,
+                      malId: entry.malId,
+                      anilistMediaId: entry.anilistMediaId,
+                    }),
+                  };
+                })}
             />
             <LibraryMediaGallery
               images={report.pictures.ok ? galleryImageSources.filter(Boolean) : []}

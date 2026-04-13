@@ -116,7 +116,12 @@ export function NautiljonImportReceptionModal() {
       return targets;
     }
     return targets.filter((entry) => {
-      return entry.title.toLowerCase().includes(normalized) || String(entry.malMangaId).includes(normalized);
+      const ani = entry.anilistMediaId != null ? String(entry.anilistMediaId) : "";
+      return (
+        entry.title.toLowerCase().includes(normalized) ||
+        String(entry.malMangaId).includes(normalized) ||
+        (ani.length > 0 && ani.includes(normalized))
+      );
     });
   }, [query, targets]);
 
@@ -206,7 +211,7 @@ export function NautiljonImportReceptionModal() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Titre ou MAL ID"
+              placeholder="Titre, MAL ID ou AniList ID"
               className="nautiljon-import-input"
             />
           </label>
@@ -221,7 +226,7 @@ export function NautiljonImportReceptionModal() {
               <option value="">Sélectionner une fiche…</option>
               {filteredTargets.map((entry) => (
                 <option key={entry.id} value={entry.id}>
-                  {entry.title} (MAL {entry.malMangaId || "—"})
+                  {`${entry.title} (MAL ${entry.malMangaId || "—"}${entry.anilistMediaId != null ? ` · AniList ${entry.anilistMediaId}` : ""})`}
                 </option>
               ))}
             </select>

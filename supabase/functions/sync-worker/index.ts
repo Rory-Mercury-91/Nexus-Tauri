@@ -36,6 +36,86 @@ function canUpdateField(selectedFieldIds: string[], fieldId: string): boolean {
   return selectedFieldIds.includes(fieldId);
 }
 
+/** Relations AniList (GraphQL) stockées dans mal_official_snapshot pour la franchise côté app. */
+function buildAnilistRelationsFromMedia(media: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+  if (!media || typeof media !== "object") {
+    return [];
+  }
+  const rels = media.relations as Record<string, unknown> | undefined;
+  const edges = Array.isArray(rels?.edges) ? (rels.edges as Array<Record<string, unknown>>) : [];
+  const out: Array<Record<string, unknown>> = [];
+  for (const edge of edges) {
+    const relationType = String(edge.relationType ?? "").trim();
+    const node = edge.node as Record<string, unknown> | undefined;
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+    const id = Number(node.id);
+    const idMalRaw = Number(node.idMal);
+    const idMal = Number.isFinite(idMalRaw) && idMalRaw > 0 ? idMalRaw : null;
+    const type = String(node.type ?? "").toUpperCase();
+    if (!Number.isFinite(id) || id <= 0) {
+      continue;
+    }
+    out.push({ relation_type: relationType, id, idMal, type });
+  }
+  return out;
+}
+
+/** Fusionne les entrées de liste OAuth par source (MAL vs AniList) sans écraser l’historique de l’autre source. */
+function mergeListEntryBySource(
+  existingSnapshot: Record<string, unknown>,
+  sourceKey: "mal" | "anilist",
+  row: unknown
+): { listBySource: Record<string, unknown>; hadMalBefore: boolean } {
+  const prevRaw = existingSnapshot.list_entry_by_source;
+  const prevBySource =
+    prevRaw && typeof prevRaw === "object" && !Array.isArray(prevRaw)
+      ? ({ ...(prevRaw as Record<string, unknown>) })
+      : {};
+  if (!prevBySource.mal && String(existingSnapshot.source ?? "") === "mal" && existingSnapshot.list_entry != null) {
+    prevBySource.mal = existingSnapshot.list_entry;
+  }
+  if (!prevBySource.anilist && String(existingSnapshot.source ?? "") === "anilist" && existingSnapshot.list_entry != null) {
+    prevBySource.anilist = existingSnapshot.list_entry;
+  }
+  const hadMalBefore = Boolean(prevBySource.mal);
+  const listBySource = { ...prevBySource, [sourceKey]: row };
+  return { listBySource, hadMalBefore };
+}
+
+type ImportReportNs = "reading" | "anime";
+
+/** Fusionne un patch JSON dans sync_runs.import_report (compteurs additionnés, titres concaténés). */
+async function mergeImportReport(
+  runId: string,
+  patch: Partial<Record<ImportReportNs, Record<string, unknown>>>
+) {
+  const admin = createServiceSupabaseClient();
+  const { data: row } = await admin.from("sync_runs").select("import_report").eq("id", runId).maybeSingle();
+  const base = ((row?.import_report as Record<string, unknown>) ?? {}) as Record<string, unknown>;
+  const next = { ...base };
+  for (const ns of ["reading", "anime"] as const) {
+    const p = patch[ns];
+    if (!p) continue;
+    const prevNs = { ...((next[ns] as Record<string, unknown>) ?? {}) };
+    for (const [k, v] of Object.entries(p)) {
+      if (k === "aux_anilist_mal_ids" && Array.isArray(v)) {
+        prevNs[k] = v;
+      } else if (k === "anilist_no_mal_id_titles" && Array.isArray(v)) {
+        const prev = Array.isArray(prevNs[k]) ? (prevNs[k] as string[]) : [];
+        prevNs[k] = [...prev, ...(v as string[])].filter(Boolean).slice(0, 40);
+      } else if (typeof v === "number") {
+        prevNs[k] = (typeof prevNs[k] === "number" ? (prevNs[k] as number) : 0) + v;
+      } else if (v !== undefined) {
+        prevNs[k] = v;
+      }
+    }
+    next[ns] = prevNs;
+  }
+  await admin.from("sync_runs").update({ import_report: next }).eq("id", runId);
+}
+
 function mergeJikanFullBySelection(
   mediaType: "anime" | "reading",
   previousFull: Record<string, unknown>,
@@ -365,7 +445,25 @@ async function mapAniListRows(accessToken: string) {
   const query = `
     query ($userId: Int) {
       MediaListCollection(type: ANIME, userId: $userId) {
-        lists { entries { status progress media { idMal title { romaji english } coverImage { large medium } } } }
+        lists {
+          entries {
+            status
+            progress
+            media {
+              id
+              idMal
+              type
+              title { romaji english }
+              coverImage { large medium }
+              relations {
+                edges {
+                  relationType
+                  node { ... on Media { id idMal type format } }
+                }
+              }
+            }
+          }
+        }
       }
     }
   `;
@@ -391,7 +489,27 @@ async function mapAniListReadingRows(accessToken: string) {
   const query = `
     query ($userId: Int) {
       MediaListCollection(type: MANGA, userId: $userId) {
-        lists { entries { status progress media { idMal title { romaji english } coverImage { large medium } chapters volumes } } }
+        lists {
+          entries {
+            status
+            progress
+            media {
+              id
+              idMal
+              type
+              title { romaji english }
+              coverImage { large medium }
+              chapters
+              volumes
+              relations {
+                edges {
+                  relationType
+                  node { ... on Media { id idMal type format } }
+                }
+              }
+            }
+          }
+        }
       }
     }
   `;
@@ -515,6 +633,44 @@ async function processImport(job: JobRow) {
     current_item_label: null,
   });
 
+  /** Pour stats « aussi sur AniList » pendant l’import MAL (IDs AniList avec idMal, une seule requête au 1er lot). */
+  let anilistMalIdSetForOverlap: Set<number> | null = null;
+  if (source === "mal" && (mediaType === "reading" || mediaType === "anime")) {
+    const safeOffset = Number(job.payload.offset ?? 0);
+    if (safeOffset === 0) {
+      const { data: aniConn } = await admin
+        .from("oauth_connections")
+        .select("access_token")
+        .eq("user_id", job.user_id)
+        .eq("provider", "anilist")
+        .maybeSingle();
+      if (aniConn?.access_token) {
+        try {
+          const aniRows = mediaType === "reading"
+            ? await mapAniListReadingRows(aniConn.access_token)
+            : await mapAniListRows(aniConn.access_token);
+          const ids: number[] = [];
+          for (const e of aniRows) {
+            const m = Number((e.media as Record<string, unknown> | undefined)?.idMal);
+            if (Number.isFinite(m) && m > 0) ids.push(m);
+          }
+          anilistMalIdSetForOverlap = new Set(ids);
+          await mergeImportReport(job.run_id, {
+            [mediaType === "reading" ? "reading" : "anime"]: { aux_anilist_mal_ids: ids },
+          });
+        } catch {
+          anilistMalIdSetForOverlap = null;
+        }
+      }
+    } else {
+      const { data: runRow } = await admin.from("sync_runs").select("import_report").eq("id", job.run_id).maybeSingle();
+      const rp = (runRow?.import_report as Record<string, unknown>) ?? {};
+      const ns = mediaType === "reading" ? "reading" : "anime";
+      const ids = (rp[ns] as Record<string, unknown> | undefined)?.aux_anilist_mal_ids as number[] | undefined;
+      anilistMalIdSetForOverlap = ids?.length ? new Set(ids) : null;
+    }
+  }
+
   let targetMatched = false;
   /** Enrich/traduction en fin de lot : le job « import » suivant doit être inséré avant (id plus petit) pour finir toute la liste avant Jikan. */
   const deferredEnrich: Array<{ mal_id: number; title: string; media_type: "anime" | "reading" }> = [];
@@ -524,11 +680,276 @@ async function processImport(job: JobRow) {
       throw new Error(RUN_CANCELLED_MSG);
     }
     const node = source === "mal" ? (row.node as Record<string, unknown> | undefined) : (row.media as Record<string, unknown> | undefined);
-    const malId = Number(source === "mal" ? node?.id : node?.idMal);
+
+    // Priorité MAL : une entrée AniList avec idMal se synchronise via MAL, pas depuis ce flux.
+    if (source === "anilist" && (mediaType === "reading" || mediaType === "anime")) {
+      const idMalAni = Number(node?.idMal);
+      if (Number.isFinite(idMalAni) && idMalAni > 0) {
+        const ns: ImportReportNs = mediaType === "reading" ? "reading" : "anime";
+        await mergeImportReport(job.run_id, { [ns]: { anilist_skipped_has_mal_id: 1 } });
+        processed += 1;
+        await upsertProgress(job.run_id, job.user_id, "import", {
+          total: importTotal,
+          processed,
+          created_count: created,
+          updated_count: updated,
+          error_count: currentImportProgress?.error_count ?? 0,
+          current_item_label: `AniList (MAL ID ${idMalAni} → sync MAL)`,
+        });
+        continue;
+      }
+    }
+
+    // AniList sans idMal : clé = media.id (GraphQL), mal_* null en base.
+    if (source === "anilist" && (mediaType === "reading" || mediaType === "anime")) {
+      const anilistMediaId = Number(node?.id);
+      if (!Number.isFinite(anilistMediaId) || anilistMediaId <= 0) {
+        const titleFallback = String((node?.title as Record<string, unknown> | undefined)?.romaji ?? "");
+        const ns: ImportReportNs = mediaType === "reading" ? "reading" : "anime";
+        await mergeImportReport(job.run_id, {
+          [ns]: {
+            anilist_no_mal_id_count: 1,
+            anilist_no_mal_id_titles: titleFallback ? [titleFallback] : [],
+          },
+        });
+        processed += 1;
+        await upsertProgress(job.run_id, job.user_id, "import", {
+          total: importTotal,
+          processed,
+          created_count: created,
+          updated_count: updated,
+          error_count: currentImportProgress?.error_count ?? 0,
+          current_item_label: titleFallback || "AniList (id média invalide)",
+        });
+        continue;
+      }
+      const title = String((node?.title as Record<string, unknown> | undefined)?.romaji ?? "");
+      if (!title) {
+        processed += 1;
+        await upsertProgress(job.run_id, job.user_id, "import", {
+          total: importTotal,
+          processed,
+          created_count: created,
+          updated_count: updated,
+          error_count: currentImportProgress?.error_count ?? 0,
+          current_item_label: "Sans titre (AniList)",
+        });
+        continue;
+      }
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        error_count: currentImportProgress?.error_count ?? 0,
+        current_item_label: title,
+      });
+      const titleEnglish = ((node?.title as Record<string, unknown> | undefined)?.english as string | undefined) ?? null;
+      const picture = ((node?.coverImage as Record<string, unknown> | undefined)?.large as string | undefined) ?? null;
+      const aniListStatusRaw = String(row.status ?? "");
+      const incomingReadStatus = mediaType === "reading"
+        ? mapAnilistMediaListStatusToMalCodes(aniListStatusRaw)
+        : null;
+      const incomingWatchStatus = mediaType === "anime"
+        ? mapAnilistMediaListStatusToWatchCodes(aniListStatusRaw)
+        : null;
+      let incomingChaptersRead: number | null = null;
+      let incomingEpisodesWatched: number | null = null;
+      if (mediaType === "reading") {
+        const p = row.progress;
+        incomingChaptersRead =
+          typeof p === "number" ? p : typeof p === "string" ? Number(p) : null;
+        if (incomingChaptersRead != null && !Number.isFinite(incomingChaptersRead)) {
+          incomingChaptersRead = null;
+        }
+      } else {
+        const p = row.progress;
+        incomingEpisodesWatched =
+          typeof p === "number" ? p : typeof p === "string" ? Number(p) : null;
+        if (incomingEpisodesWatched != null && !Number.isFinite(incomingEpisodesWatched)) {
+          incomingEpisodesWatched = null;
+        }
+      }
+      const targetTable = mediaType === "reading" ? "library_reading" : "library_anime";
+      const statusCol = mediaType === "reading" ? "read_status" : "watch_status";
+      const existingSelect =
+        mediaType === "reading"
+          ? "id, title, title_english, main_picture_url, read_status, mal_official_snapshot, reading_progress_by_source"
+          : "id, title, title_english, main_picture_url, watch_status, mal_official_snapshot, watch_progress_by_source";
+      const { data: existing } = await admin
+        .from(targetTable)
+        .select(existingSelect)
+        .eq("user_id", job.user_id)
+        .eq("anilist_media_id", anilistMediaId)
+        .maybeSingle();
+      const existingSnapshot = (existing?.mal_official_snapshot ?? {}) as Record<string, unknown>;
+      const sourceKey = "anilist" as const;
+      const { listBySource, hadMalBefore } = mergeListEntryBySource(existingSnapshot, sourceKey, row);
+      const hasMalListData = hadMalBefore || Boolean(listBySource.mal);
+      const listEntryNormalized = {
+        ...(row as Record<string, unknown>),
+        list_status: {
+          status: aniListStatusRaw,
+          num_chapters_read: mediaType === "reading" ? incomingChaptersRead : undefined,
+          num_episodes_watched: mediaType === "anime" ? incomingEpisodesWatched : undefined,
+        },
+      };
+      const mergedSnapshot: Record<string, unknown> = {
+        ...existingSnapshot,
+        source: "anilist",
+        list_entry_by_source: { ...listBySource, anilist: listEntryNormalized },
+        list_entry: (listBySource.mal ?? listBySource.anilist ?? listEntryNormalized) as unknown,
+      };
+      const anilistRelations = buildAnilistRelationsFromMedia(node as Record<string, unknown>);
+      if (anilistRelations.length > 0) {
+        mergedSnapshot.anilist_relations = anilistRelations;
+      }
+      const metadataFromAnilistAllowed =
+        !hasMalListData ||
+        (selectedFieldIds.length > 0 && canUpdateField(selectedFieldIds, "title"));
+      const nextTitle =
+        metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+          ? title
+          : String(existing?.title ?? title);
+      const nextTitleEnglish =
+        metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+          ? titleEnglish
+          : ((existing?.title_english as string | null | undefined) ?? titleEnglish);
+      const nextPicture =
+        metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+          ? (picture || null)
+          : ((existing?.main_picture_url as string | null | undefined) ?? picture ?? null);
+      const ts = nowIso();
+      let nextReadingProgress: Record<string, unknown> =
+        mediaType === "reading"
+          ? ((existing as { reading_progress_by_source?: unknown } | null)?.reading_progress_by_source as Record<
+              string,
+              unknown
+            >) ?? {}
+          : {};
+      let nextWatchProgress: Record<string, unknown> =
+        mediaType === "anime"
+          ? ((existing as { watch_progress_by_source?: unknown } | null)?.watch_progress_by_source as Record<
+              string,
+              unknown
+            >) ?? {}
+          : {};
+      if (mediaType === "reading" && canUpdateField(selectedFieldIds, "status") && incomingReadStatus) {
+        const patch: Record<string, unknown> = {
+          read_status: incomingReadStatus,
+          updated_at: ts,
+        };
+        if (incomingChaptersRead !== null) {
+          patch.chapters_read = incomingChaptersRead;
+        }
+        nextReadingProgress = mergeReadingProgressBySource(nextReadingProgress, sourceKey, patch);
+      }
+      if (mediaType === "anime" && canUpdateField(selectedFieldIds, "status") && incomingWatchStatus) {
+        const patch: Record<string, unknown> = {
+          watch_status: incomingWatchStatus,
+          updated_at: ts,
+        };
+        if (incomingEpisodesWatched !== null) {
+          patch.episodes_watched = incomingEpisodesWatched;
+        }
+        nextWatchProgress = mergeWatchProgressBySource(nextWatchProgress, sourceKey, patch);
+      }
+      const canonicalRead = resolveCanonicalReadStatus(nextReadingProgress);
+      const canonicalWatch = resolveCanonicalWatchStatus(nextWatchProgress);
+      const nextStatus = canUpdateField(selectedFieldIds, "status")
+        ? (mediaType === "reading"
+          ? (canonicalRead ?? (existing?.read_status as string | null | undefined) ?? null)
+          : (canonicalWatch ?? (existing?.watch_status as string | null | undefined) ?? null))
+        : mediaType === "reading"
+        ? ((existing?.read_status as string | null | undefined) ?? null)
+        : ((existing?.watch_status as string | null | undefined) ?? null);
+      const upsertPayload: Record<string, unknown> = {
+        user_id: job.user_id,
+        mal_manga_id: mediaType === "reading" ? null : undefined,
+        mal_id: mediaType === "anime" ? null : undefined,
+        anilist_media_id: anilistMediaId,
+        title: nextTitle,
+        title_english: nextTitleEnglish,
+        main_picture_url: nextPicture,
+        [statusCol]: nextStatus,
+        jikan_snapshot: {},
+        jikan_snapshot_at: null,
+        mal_official_snapshot: mergedSnapshot,
+        mal_official_snapshot_at: nowIso(),
+      };
+      if (mediaType === "reading") {
+        delete upsertPayload.mal_id;
+        upsertPayload.reading_progress_by_source = nextReadingProgress;
+      } else {
+        delete upsertPayload.mal_manga_id;
+        upsertPayload.watch_progress_by_source = nextWatchProgress;
+      }
+      await admin.from(targetTable).upsert(upsertPayload, {
+        onConflict: "user_id,anilist_media_id",
+      });
+      processed += 1;
+      if (existing) {
+        updated += 1;
+      } else {
+        created += 1;
+      }
+      const ns: ImportReportNs = mediaType === "reading" ? "reading" : "anime";
+      await mergeImportReport(job.run_id, {
+        [ns]: existing ? { from_anilist_updated: 1 } : { from_anilist_created: 1 },
+      });
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        current_item_label: title,
+      });
+      if (processed % 5 === 0) {
+        await admin
+          .from("sync_jobs")
+          .update({ updated_at: nowIso() })
+          .eq("id", job.id)
+          .eq("status", "running");
+      }
+      continue;
+    }
+
+    if (source !== "mal") {
+      processed += 1;
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        error_count: currentImportProgress?.error_count ?? 0,
+        current_item_label: null,
+      });
+      continue;
+    }
+
+    const malId = Number(node?.id);
     if (!Number.isFinite(malId) || malId <= 0) {
+      processed += 1;
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        error_count: currentImportProgress?.error_count ?? 0,
+        current_item_label: "Entrée invalide (MAL)",
+      });
       continue;
     }
     if (hasTarget && malId !== targetMalId) {
+      processed += 1;
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        error_count: currentImportProgress?.error_count ?? 0,
+        current_item_label: null,
+      });
       continue;
     }
     if (hasTarget) {
@@ -536,8 +957,26 @@ async function processImport(job: JobRow) {
     }
     const title = String(source === "mal" ? node?.title ?? "" : (node?.title as Record<string, unknown> | undefined)?.romaji ?? "");
     if (!title) {
+      processed += 1;
+      await upsertProgress(job.run_id, job.user_id, "import", {
+        total: importTotal,
+        processed,
+        created_count: created,
+        updated_count: updated,
+        error_count: currentImportProgress?.error_count ?? 0,
+        current_item_label: "Sans titre",
+      });
       continue;
     }
+    // Heartbeat avant requêtes lentes (évite un « stall » côté UI si une ligne bloque longtemps).
+    await upsertProgress(job.run_id, job.user_id, "import", {
+      total: importTotal,
+      processed,
+      created_count: created,
+      updated_count: updated,
+      error_count: currentImportProgress?.error_count ?? 0,
+      current_item_label: title,
+    });
     const titleEnglish = source === "mal"
       ? ((node?.alternative_titles as Record<string, unknown> | undefined)?.en as string | undefined) ?? null
       : ((node?.title as Record<string, unknown> | undefined)?.english as string | undefined) ?? null;
@@ -625,25 +1064,37 @@ async function processImport(job: JobRow) {
     const cachedJikanSnapshot = (cachedByMal?.jikan_snapshot ?? null) as Record<string, unknown> | null;
 
     const existingSnapshot = (existing?.mal_official_snapshot ?? {}) as Record<string, unknown>;
-    const incomingSnapshot = { source, list_entry: row } as Record<string, unknown>;
-    const mergedSnapshot = selectedFieldIds.length === 0
-      ? incomingSnapshot
-      : {
-          ...existingSnapshot,
-          source,
-          list_entry: row,
-        };
-    const nextTitle = canUpdateField(selectedFieldIds, "title")
-      ? title
-      : String(existing?.title ?? title);
-    const nextTitleEnglish = canUpdateField(selectedFieldIds, "title")
-      ? titleEnglish
-      : ((existing?.title_english as string | null | undefined) ?? titleEnglish);
-    const nextPicture = canUpdateField(selectedFieldIds, "title")
-      ? (picture || cachedByMal?.main_picture_url || null)
-      : ((existing?.main_picture_url as string | null | undefined) ?? picture ?? cachedByMal?.main_picture_url ?? null);
-
     const sourceKey = source === "mal" ? "mal" : "anilist";
+    const { listBySource, hadMalBefore } = mergeListEntryBySource(existingSnapshot, sourceKey, row);
+    const hasMalListData = hadMalBefore || Boolean(listBySource.mal);
+    const mergedSnapshot: Record<string, unknown> = {
+      ...existingSnapshot,
+      source,
+      list_entry_by_source: listBySource,
+      /** Affichage / extracteurs MAL : priorité à la ligne de liste MAL si elle existe. */
+      list_entry: (listBySource.mal ?? listBySource.anilist ?? row) as unknown,
+    };
+
+    /**
+     * Sync AniList « pleine liste » sans diff : ne pas écraser titre / visuel déjà issus d’un import MAL.
+     * Si l’utilisateur coche explicitement « titre » dans la prévisualisation, on applique AniList.
+     */
+    const metadataFromAnilistAllowed =
+      source !== "anilist" ||
+      !hasMalListData ||
+      (selectedFieldIds.length > 0 && canUpdateField(selectedFieldIds, "title"));
+    const nextTitle =
+      metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+        ? title
+        : String(existing?.title ?? title);
+    const nextTitleEnglish =
+      metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+        ? titleEnglish
+        : ((existing?.title_english as string | null | undefined) ?? titleEnglish);
+    const nextPicture =
+      metadataFromAnilistAllowed && canUpdateField(selectedFieldIds, "title")
+        ? (picture || cachedByMal?.main_picture_url || null)
+        : ((existing?.main_picture_url as string | null | undefined) ?? picture ?? cachedByMal?.main_picture_url ?? null);
     const ts = nowIso();
 
     let nextReadingProgress: Record<string, unknown> =
@@ -719,6 +1170,15 @@ async function processImport(job: JobRow) {
       updated += 1;
     } else {
       created += 1;
+    }
+    if (source === "mal" && (mediaType === "reading" || mediaType === "anime")) {
+      const ns: ImportReportNs = mediaType === "reading" ? "reading" : "anime";
+      await mergeImportReport(job.run_id, {
+        [ns]: existing ? { from_mal_updated: 1 } : { from_mal_created: 1 },
+      });
+      if (anilistMalIdSetForOverlap?.has(malId)) {
+        await mergeImportReport(job.run_id, { [ns]: { mal_also_on_anilist: 1 } });
+      }
     }
     const enrichMeta = (cachedJikanSnapshot?.enrich_meta ?? {}) as Record<string, unknown>;
     const hasFull = Boolean(
@@ -962,7 +1422,7 @@ async function ensureTranslateTotal(runId: string, userId: string) {
 
 async function completeOrFailRun(runId: string) {
   const admin = createServiceSupabaseClient();
-  const { data: run } = await admin.from("sync_runs").select("status").eq("id", runId).maybeSingle();
+  const { data: run } = await admin.from("sync_runs").select("status, import_report").eq("id", runId).maybeSingle();
   if (String(run?.status ?? "") === "cancelled") {
     return;
   }
@@ -972,11 +1432,22 @@ async function completeOrFailRun(runId: string) {
     return;
   }
   const failed = statuses.some((s) => s === "failed");
+  const rawReport = (run?.import_report as Record<string, unknown> | undefined) ?? {};
+  const nextReport = { ...rawReport };
+  for (const ns of ["reading", "anime"] as const) {
+    const o = nextReport[ns];
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      const copy = { ...(o as Record<string, unknown>) };
+      delete copy.aux_anilist_mal_ids;
+      nextReport[ns] = copy;
+    }
+  }
   await admin
     .from("sync_runs")
     .update({
       status: failed ? "failed" : "completed",
       finished_at: nowIso(),
+      import_report: nextReport,
     })
     .eq("id", runId)
     .in("status", ["queued", "running"]);

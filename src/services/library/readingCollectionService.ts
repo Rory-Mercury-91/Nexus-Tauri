@@ -10,7 +10,10 @@ import { listFamilyVisibleProfiles } from "@/services/family/familyService";
 
 export type ReadingCollectionEntry = {
   id: string;
+  /** MAL manga id ; 0 si entrée uniquement AniList. */
   malId: number;
+  /** Présent si mal_manga_id est null (sync AniList sans idMal). */
+  anilistMediaId: number | null;
   title: string;
   type: "Manga" | "Manhwa" | "Manhua" | "Light novel" | "Roman" | "One-shot" | "Doujinshi" | "Inconnu";
   userStatus: "Planifié" | "En cours" | "En pause" | "Terminé" | "Abandonné";
@@ -114,13 +117,28 @@ function toListStatus(snapshot: Record<string, unknown>): Record<string, unknown
   return (listEntry.list_status ?? snapshot.my_list_status ?? {}) as Record<string, unknown>;
 }
 
+/** Route React Router vers la fiche détail (MAL, AniList-only, ou id de ligne). */
+export function readingEntryDetailPath(
+  entry: Pick<ReadingCollectionEntry, "id" | "malId" | "anilistMediaId">
+): string {
+  if (entry.malId > 0) {
+    return `/lectures/${entry.malId}`;
+  }
+  if (entry.anilistMediaId != null && entry.anilistMediaId > 0) {
+    return `/lectures/anilist/${entry.anilistMediaId}`;
+  }
+  return `/lectures/${entry.id}`;
+}
+
 export async function fetchReadingCollection(supabase: SupabaseClient): Promise<ReadingCollectionEntry[]> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData?.user?.id ?? "";
 
   const { data, error } = await supabase
     .from("library_reading")
-    .select("id, mal_manga_id, title, main_picture_url, read_status, created_at, mal_official_snapshot, jikan_snapshot")
+    .select(
+      "id, mal_manga_id, anilist_media_id, title, main_picture_url, read_status, created_at, mal_official_snapshot, jikan_snapshot"
+    )
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -431,9 +449,15 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       ? (mihonChaptersTotal > 0 ? mihonChaptersTotal : chaptersTotal)
       : chaptersTotal;
 
+    const malMangaNum = Number(row.mal_manga_id ?? 0);
+    const aniMedia =
+      typeof (row as { anilist_media_id?: unknown }).anilist_media_id === "number"
+        ? (row as { anilist_media_id: number }).anilist_media_id
+        : null;
     return {
       id: readingId,
-      malId: Number(row.mal_manga_id),
+      malId: Number.isFinite(malMangaNum) && malMangaNum > 0 ? malMangaNum : 0,
+      anilistMediaId: aniMedia,
       title: String(row.title),
       type,
       userStatus: mapReadStatus(rawReadStatus),

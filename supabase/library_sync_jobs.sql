@@ -133,3 +133,8 @@ begin
     add constraint sync_runs_media_type_check
     check (media_type in ('anime', 'reading'));
 end $$;
+
+alter table public.sync_runs add column if not exists import_report jsonb not null default '{}'::jsonb;
+
+comment on column public.sync_runs.import_report is
+  'Compteurs et échantillons (reading / anime) : imports MAL, ignorés AniList, chevauchements, etc.';

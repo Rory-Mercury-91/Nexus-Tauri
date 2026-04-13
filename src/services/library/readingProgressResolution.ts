@@ -256,12 +256,25 @@ export function mergeReadingProgressBySource(
   return base;
 }
 
+/** Ligne de liste au format MAL (priorité à `list_entry_by_source.mal` si présent). */
+function getMalShapedListEntryFromSnapshot(
+  snap: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  const bySource = snap?.list_entry_by_source as Record<string, unknown> | undefined;
+  const fromMal = bySource?.mal;
+  if (fromMal && typeof fromMal === "object" && !Array.isArray(fromMal)) {
+    return fromMal as Record<string, unknown>;
+  }
+  const legacy = snap?.list_entry as Record<string, unknown> | undefined;
+  return legacy;
+}
+
 /** Chapitres lus depuis le snapshot MAL OAuth (liste utilisateur). */
 export function extractNumChaptersReadFromMalOfficialSnapshot(
   malOfficialSnapshot: unknown
 ): number | null {
   const snap = malOfficialSnapshot as Record<string, unknown> | undefined;
-  const listEntry = snap?.list_entry as Record<string, unknown> | undefined;
+  const listEntry = getMalShapedListEntryFromSnapshot(snap);
   const listStatus = listEntry?.list_status as Record<string, unknown> | undefined;
   const n = listStatus?.num_chapters_read;
   if (typeof n === "number" && Number.isFinite(n)) {
@@ -279,7 +292,7 @@ export function extractNumEpisodesWatchedFromMalOfficialSnapshot(
   malOfficialSnapshot: unknown
 ): number | null {
   const snap = malOfficialSnapshot as Record<string, unknown> | undefined;
-  const listEntry = snap?.list_entry as Record<string, unknown> | undefined;
+  const listEntry = getMalShapedListEntryFromSnapshot(snap);
   const listStatus = listEntry?.list_status as Record<string, unknown> | undefined;
   const n = listStatus?.num_episodes_watched;
   if (typeof n === "number" && Number.isFinite(n)) {

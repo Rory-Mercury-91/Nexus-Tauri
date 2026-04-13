@@ -12,6 +12,7 @@ import {
   deleteReadingEntry,
   fetchReadingCollection,
   fetchReadingCollectionStamp,
+  readingEntryDetailPath,
   setReadingMihonState,
   updateReadingStatus,
   updateReadingFavorite,
@@ -25,6 +26,9 @@ import {
 import { fetchSyncImportPreview } from "@/services/library/syncImportPreviewService";
 import type { SyncDiffField } from "@/services/library/syncDiffService";
 import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
+import type { SyncImportReportBundle, SyncSource } from "@/services/library/syncService";
+import { hasReadingImportReportContent } from "@/services/library/readingSyncImportReport";
+import { ReadingSyncImportReportBanner } from "@/features/library/ReadingSyncImportReportBanner/ReadingSyncImportReportBanner";
 import { notifyToast } from "@/lib/toastEvents";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
 import {
@@ -137,11 +141,17 @@ export function ReadingCollectionPage() {
   const [pageSize, setPageSize] = useState<PageSizeValue>(25);
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
-  const { startSync, loading: syncLoading, activeRun } = useReadingSyncProgress();
+  const { startSync, loading: syncLoading, activeRun, recentRuns } = useReadingSyncProgress();
   const isSyncBusy = Boolean(
     activeRun && (activeRun.status === "queued" || activeRun.status === "running")
   );
-  
+
+  const [reportBanner, setReportBanner] = useState<{
+    runId: string;
+    source: SyncSource;
+    report: SyncImportReportBundle;
+  } | null>(null);
+
   const [nautiljonRefreshing, setNautiljonRefreshing] = useState(false);
   const [showNautiljonPendingOnly, setShowNautiljonPendingOnly] = useState(false);
   const [showMihonOnly, setShowMihonOnly] = useState(false);
@@ -221,6 +231,31 @@ export function ReadingCollectionPage() {
     }
     void loadCollection(false);
   }, [loadCollection]);
+
+  useEffect(() => {
+    const last = recentRuns.find((r) => r.status === "completed" && r.media_type === "reading");
+    if (!last?.import_report?.reading) {
+      setReportBanner(null);
+      return;
+    }
+    try {
+      if (sessionStorage.getItem(`reading:sync-report-dismissed:${last.id}`)) {
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    const reading = last.import_report.reading;
+    if (!hasReadingImportReportContent(reading)) {
+      setReportBanner(null);
+      return;
+    }
+    setReportBanner({
+      runId: last.id,
+      source: last.source,
+      report: last.import_report as SyncImportReportBundle,
+    });
+  }, [recentRuns]);
 
   useEffect(() => {
     let cancelled = false;
@@ -357,12 +392,12 @@ export function ReadingCollectionPage() {
     }
   }
 
-  function navigateToReadingDetail(malId: number) {
+  function navigateToReadingDetail(entry: ReadingCollectionEntry) {
     const container = getMainScrollContainer();
     const y = readMainScrollTop(container);
     sessionStorage.setItem(getScrollKey(viewMode), String(y));
     markReturnToReadingCollection();
-    navigate(`/lectures/${malId}`, {
+    navigate(readingEntryDetailPath(entry), {
       state: buildReadingDetailState(y, viewMode),
     });
   }
@@ -479,6 +514,9 @@ export function ReadingCollectionPage() {
   const duplicateMalIds = useMemo(() => {
     const counts = new Map<number, number>();
     filteredBase.forEach((entry) => {
+      if (entry.malId <= 0) {
+        return;
+      }
       counts.set(entry.malId, (counts.get(entry.malId) ?? 0) + 1);
     });
     return new Set(
@@ -701,6 +739,15 @@ export function ReadingCollectionPage() {
         <p className="library-page-lead">
           Nautiljon: {nautiljonPendingCount} fiche(s) à réimporter manuellement.
         </p>
+      ) : null}
+
+      {reportBanner ? (
+        <ReadingSyncImportReportBanner
+          runId={reportBanner.runId}
+          source={reportBanner.source}
+          report={reportBanner.report}
+          onDismiss={() => setReportBanner(null)}
+        />
       ) : null}
 
       {collectionError ? <p className="library-page-lead">{collectionError}</p> : null}
@@ -942,7 +989,7 @@ export function ReadingCollectionPage() {
                         type="button"
                         className="anime-collection-btn"
                         style={{ textAlign: "left" }}
-                        onClick={() => navigateToReadingDetail(entry.malId)}
+                        onClick={() => navigateToReadingDetail(entry)}
                         title={entry.title}
                       >
                         <div>{entry.title}</div>
@@ -990,7 +1037,7 @@ export function ReadingCollectionPage() {
                 if (target.closest("button,a,input,select,textarea,label")) {
                   return;
                 }
-                navigateToReadingDetail(item.malId);
+                navigateToReadingDetail(item);
               }}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" && e.key !== " ") {
@@ -1001,7 +1048,7 @@ export function ReadingCollectionPage() {
                   return;
                 }
                 e.preventDefault();
-                navigateToReadingDetail(item.malId);
+                navigateToReadingDetail(item);
               }}
             >
               {item.favorite ? (
@@ -1010,10 +1057,10 @@ export function ReadingCollectionPage() {
                 </span>
               ) : null}
               <Link
-                to={`/lectures/${item.malId}`}
+                to={readingEntryDetailPath(item)}
                 onClick={(e) => {
                   e.preventDefault();
-                  navigateToReadingDetail(item.malId);
+                  navigateToReadingDetail(item);
                 }}
                 className="anime-collection-cover-link"
               >
@@ -1034,10 +1081,10 @@ export function ReadingCollectionPage() {
                         </span>
                       ) : null}
                       <Link
-                        to={`/lectures/${item.malId}`}
+                        to={readingEntryDetailPath(item)}
                         onClick={(e) => {
                           e.preventDefault();
-                          navigateToReadingDetail(item.malId);
+                          navigateToReadingDetail(item);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}
@@ -1127,10 +1174,10 @@ export function ReadingCollectionPage() {
                     </div>
                     <div className="anime-collection-title-row">
                       <Link
-                        to={`/lectures/${item.malId}`}
+                        to={readingEntryDetailPath(item)}
                         onClick={(e) => {
                           e.preventDefault();
-                          navigateToReadingDetail(item.malId);
+                          navigateToReadingDetail(item);
                         }}
                         className="anime-collection-title-link"
                         title={item.title}

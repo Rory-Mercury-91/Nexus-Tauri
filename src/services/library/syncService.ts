@@ -4,6 +4,23 @@ import { invokeEdgeFunction } from "@/services/supabase/edgeFunctionInvoke";
 export type SyncSource = "mal" | "anilist";
 export type SyncMediaType = "anime" | "reading";
 
+/** Compteurs d’import manga (clé `reading` dans import_report). */
+export type SyncReadingImportReport = {
+  from_mal_created?: number;
+  from_mal_updated?: number;
+  from_anilist_created?: number;
+  from_anilist_updated?: number;
+  anilist_skipped_has_mal_id?: number;
+  mal_also_on_anilist?: number;
+  anilist_no_mal_id_count?: number;
+  anilist_no_mal_id_titles?: string[];
+};
+
+export type SyncImportReportBundle = {
+  reading?: SyncReadingImportReport;
+  anime?: SyncReadingImportReport;
+};
+
 export type SyncRun = {
   id: string;
   source: SyncSource;
@@ -14,6 +31,7 @@ export type SyncRun = {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  import_report?: SyncImportReportBundle | null;
 };
 
 export type SyncProgressRow = {

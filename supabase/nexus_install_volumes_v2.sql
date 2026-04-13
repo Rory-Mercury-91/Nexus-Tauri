@@ -32,7 +32,8 @@ drop function if exists public.user_is_owner_of_reading_volume(uuid);
 -- -----------------------------------------------------------------------------
 create table if not exists public.library_manga_volume_catalog (
   id uuid primary key default gen_random_uuid(),
-  mal_manga_id integer not null,
+  mal_manga_id integer,
+  anilist_media_id integer,
   volume_number integer not null check (volume_number > 0),
   volume_type text not null default 'standard',
   image_url text,
@@ -43,14 +44,33 @@ create table if not exists public.library_manga_volume_catalog (
   created_by uuid not null default auth.uid() references auth.users (id) on delete cascade,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (mal_manga_id, volume_number)
+  constraint library_manga_volume_catalog_mal_or_anilist_chk check (
+    (mal_manga_id is not null and mal_manga_id > 0)
+    or (anilist_media_id is not null and anilist_media_id > 0)
+  )
 );
 
 comment on table public.library_manga_volume_catalog is
-  'Catalogue VF : une ligne par (mal_manga_id, volume_number). Import Nautiljon / saisie.';
+  'Catalogue VF : une ligne par (mal_manga_id, volume_number) ou (anilist_media_id, volume_number).';
+
+create unique index if not exists library_manga_volume_catalog_mal_vol_uq
+  on public.library_manga_volume_catalog (mal_manga_id, volume_number)
+  where mal_manga_id is not null and mal_manga_id > 0;
+
+create unique index if not exists library_manga_volume_catalog_anilist_vol_uq
+  on public.library_manga_volume_catalog (anilist_media_id, volume_number)
+  where anilist_media_id is not null and anilist_media_id > 0;
 
 create index if not exists library_manga_volume_catalog_mal_idx
-  on public.library_manga_volume_catalog (mal_manga_id, volume_number);
+  on public.library_manga_volume_catalog (mal_manga_id, volume_number)
+  where mal_manga_id is not null and mal_manga_id > 0;
+
+create index if not exists library_manga_volume_catalog_anilist_idx
+  on public.library_manga_volume_catalog (anilist_media_id, volume_number)
+  where anilist_media_id is not null;
+
+comment on column public.library_manga_volume_catalog.anilist_media_id is
+  'Catalogue tomes pour séries AniList-only (sans MAL).';
 
 drop trigger if exists library_manga_volume_catalog_set_updated_at
   on public.library_manga_volume_catalog;
@@ -278,16 +298,20 @@ create trigger user_manga_volume_state_refresh_mal_after
 drop function if exists public.upsert_manga_volume_catalog_row(
   integer, integer, text, text, date, numeric, text, jsonb
 );
+drop function if exists public.upsert_manga_volume_catalog_row(
+  integer, integer, text, text, date, numeric, text, jsonb, integer
+);
 
 create or replace function public.upsert_manga_volume_catalog_row(
-  p_mal_manga_id integer,
-  p_volume_number integer,
+  p_mal_manga_id integer default null,
+  p_volume_number integer default null,
   p_volume_type text default 'standard',
   p_image_url text default null,
   p_release_date_vf date default null,
   p_price_euros numeric default 0,
   p_source text default 'manual',
-  p_import_payload jsonb default null
+  p_import_payload jsonb default null,
+  p_anilist_media_id integer default null
 ) returns uuid
 language plpgsql
 security definer
@@ -295,13 +319,103 @@ set search_path = public
 as $$
 declare
   v_id uuid;
+  v_use_mal boolean;
+  v_use_ani boolean;
 begin
-  if p_mal_manga_id is null or p_volume_number is null or p_volume_number <= 0 then
-    raise exception 'mal_manga_id et volume_number requis';
+  v_use_mal := p_mal_manga_id is not null and p_mal_manga_id > 0;
+  v_use_ani := p_anilist_media_id is not null and p_anilist_media_id > 0;
+
+  if p_volume_number is null or p_volume_number <= 0 then
+    raise exception 'volume_number requis';
+  end if;
+
+  if v_use_mal and v_use_ani then
+    v_use_ani := false;
+  end if;
+
+  if not v_use_mal and not v_use_ani then
+    raise exception 'mal_manga_id ou anilist_media_id requis';
+  end if;
+
+  if v_use_mal then
+    select c.id into v_id
+    from public.library_manga_volume_catalog c
+    where c.mal_manga_id = p_mal_manga_id
+      and c.volume_number = p_volume_number
+    limit 1;
+
+    if v_id is not null then
+      update public.library_manga_volume_catalog c
+      set
+        volume_type = coalesce(nullif(trim(p_volume_type), ''), c.volume_type),
+        image_url = coalesce(p_image_url, c.image_url),
+        release_date_vf = coalesce(p_release_date_vf, c.release_date_vf),
+        price_euros = case
+          when coalesce(p_price_euros, 0) > 0 then greatest(coalesce(p_price_euros, 0), 0)
+          else c.price_euros
+        end,
+        source = coalesce(nullif(trim(p_source), ''), c.source),
+        import_payload = coalesce(p_import_payload, c.import_payload),
+        updated_at = now()
+      where c.id = v_id;
+      return v_id;
+    end if;
+
+    insert into public.library_manga_volume_catalog (
+      mal_manga_id,
+      anilist_media_id,
+      volume_number,
+      volume_type,
+      image_url,
+      release_date_vf,
+      price_euros,
+      source,
+      import_payload,
+      created_by
+    )
+    values (
+      p_mal_manga_id,
+      null,
+      p_volume_number,
+      coalesce(nullif(trim(p_volume_type), ''), 'standard'),
+      p_image_url,
+      p_release_date_vf,
+      greatest(coalesce(p_price_euros, 0), 0),
+      coalesce(nullif(trim(p_source), ''), 'manual'),
+      p_import_payload,
+      auth.uid()
+    )
+    returning id into v_id;
+
+    return v_id;
+  end if;
+
+  select c.id into v_id
+  from public.library_manga_volume_catalog c
+  where c.anilist_media_id = p_anilist_media_id
+    and c.volume_number = p_volume_number
+  limit 1;
+
+  if v_id is not null then
+    update public.library_manga_volume_catalog c
+    set
+      volume_type = coalesce(nullif(trim(p_volume_type), ''), c.volume_type),
+      image_url = coalesce(p_image_url, c.image_url),
+      release_date_vf = coalesce(p_release_date_vf, c.release_date_vf),
+      price_euros = case
+        when coalesce(p_price_euros, 0) > 0 then greatest(coalesce(p_price_euros, 0), 0)
+        else c.price_euros
+      end,
+      source = coalesce(nullif(trim(p_source), ''), c.source),
+      import_payload = coalesce(p_import_payload, c.import_payload),
+      updated_at = now()
+    where c.id = v_id;
+    return v_id;
   end if;
 
   insert into public.library_manga_volume_catalog (
     mal_manga_id,
+    anilist_media_id,
     volume_number,
     volume_type,
     image_url,
@@ -312,7 +426,8 @@ begin
     created_by
   )
   values (
-    p_mal_manga_id,
+    null,
+    p_anilist_media_id,
     p_volume_number,
     coalesce(nullif(trim(p_volume_type), ''), 'standard'),
     p_image_url,
@@ -322,17 +437,6 @@ begin
     p_import_payload,
     auth.uid()
   )
-  on conflict (mal_manga_id, volume_number) do update set
-    volume_type = coalesce(excluded.volume_type, library_manga_volume_catalog.volume_type),
-    image_url = coalesce(excluded.image_url, library_manga_volume_catalog.image_url),
-    release_date_vf = coalesce(excluded.release_date_vf, library_manga_volume_catalog.release_date_vf),
-    price_euros = case
-      when excluded.price_euros > 0 then excluded.price_euros
-      else library_manga_volume_catalog.price_euros
-    end,
-    source = excluded.source,
-    import_payload = coalesce(excluded.import_payload, library_manga_volume_catalog.import_payload),
-    updated_at = now()
   returning id into v_id;
 
   return v_id;
@@ -340,7 +444,7 @@ end;
 $$;
 
 grant execute on function public.upsert_manga_volume_catalog_row(
-  integer, integer, text, text, date, numeric, text, jsonb
+  integer, integer, text, text, date, numeric, text, jsonb, integer
 ) to authenticated;
 
 -- -----------------------------------------------------------------------------
@@ -367,9 +471,17 @@ select
     select 1
     from public.family_manga_volume_owner o
     join public.library_manga_volume_catalog c on c.id = o.catalog_volume_id
-    where c.mal_manga_id = r.mal_manga_id
-      and o.user_id <> r.user_id
+    where o.user_id <> r.user_id
       and o.family_id in (select public.user_family_ids())
+      and (
+        (r.mal_manga_id is not null and r.mal_manga_id > 0 and c.mal_manga_id = r.mal_manga_id)
+        or (
+          r.anilist_media_id is not null
+          and r.anilist_media_id > 0
+          and c.anilist_media_id is not null
+          and c.anilist_media_id = r.anilist_media_id
+        )
+      )
   ) as has_shared_possession
 from public.library_reading r
 left join public.library_reading_public rp

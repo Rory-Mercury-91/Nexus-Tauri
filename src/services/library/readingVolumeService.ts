@@ -40,24 +40,30 @@ export async function fetchReadingVolumes(
 ): Promise<ReadingVolumeRow[]> {
   const { data: readingRow, error: readErr } = await supabase
     .from("library_reading")
-    .select("mal_manga_id")
+    .select("mal_manga_id, anilist_media_id")
     .eq("id", readingId)
     .single();
   if (readErr || !readingRow) {
     throw new Error(readErr?.message ?? "Fiche lecture introuvable.");
   }
   const malMangaId = Number((readingRow as { mal_manga_id?: unknown }).mal_manga_id ?? 0);
-  if (!Number.isFinite(malMangaId) || malMangaId <= 0) {
+  const anilistMediaId = Number((readingRow as { anilist_media_id?: unknown }).anilist_media_id ?? 0);
+  const useMal = Number.isFinite(malMangaId) && malMangaId > 0;
+  const useAni = Number.isFinite(anilistMediaId) && anilistMediaId > 0;
+  if (!useMal && !useAni) {
     return [];
   }
 
   const familyId = opts?.familyId ?? null;
 
-  const { data: catalogRows, error: catErr } = await supabase
+  let catalogQuery = supabase
     .from("library_manga_volume_catalog")
-    .select("id, mal_manga_id, volume_number, volume_type, image_url, release_date_vf, price_euros")
-    .eq("mal_manga_id", malMangaId)
+    .select("id, mal_manga_id, anilist_media_id, volume_number, volume_type, image_url, release_date_vf, price_euros")
     .order("volume_number", { ascending: true });
+  catalogQuery = useMal
+    ? catalogQuery.eq("mal_manga_id", malMangaId)
+    : catalogQuery.eq("anilist_media_id", anilistMediaId);
+  const { data: catalogRows, error: catErr } = await catalogQuery;
   if (catErr) {
     throw new Error(catErr.message);
   }
@@ -165,7 +171,10 @@ export async function upsertReadingVolume(
   supabase: SupabaseClient,
   input: {
     readingId: string;
-    malMangaId: number;
+    /** Si > 0, clé catalogue MAL (prioritaire si les deux sont fournis). */
+    malMangaId?: number;
+    /** Si > 0 et pas de MAL, clé catalogue AniList-only. */
+    anilistMediaId?: number;
     familyId: string | null;
     volumeNumber: number;
     volumeType: string;
@@ -179,8 +188,16 @@ export async function upsertReadingVolume(
     owners: ReadingVolumeOwner[];
   }
 ): Promise<void> {
+  const mal = Number(input.malMangaId ?? 0);
+  const ani = Number(input.anilistMediaId ?? 0);
+  const useMal = Number.isFinite(mal) && mal > 0;
+  const useAni = Number.isFinite(ani) && ani > 0;
+  if (!useMal && !useAni) {
+    throw new Error("mal_manga_id ou anilist_media_id requis pour le catalogue des tomes.");
+  }
+
   const { data: rpcData, error: rpcError } = await supabase.rpc("upsert_manga_volume_catalog_row", {
-    p_mal_manga_id: input.malMangaId,
+    p_mal_manga_id: useMal ? mal : null,
     p_volume_number: input.volumeNumber,
     p_volume_type: input.volumeType,
     p_image_url: input.imageUrl,
@@ -188,6 +205,7 @@ export async function upsertReadingVolume(
     p_price_euros: input.priceEuros,
     p_source: "app",
     p_import_payload: null,
+    p_anilist_media_id: useMal ? null : ani,
   });
   if (rpcError) {
     throw new Error(rpcError.message);
