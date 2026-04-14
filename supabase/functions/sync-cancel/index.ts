@@ -56,6 +56,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: `Erreur annulation run: ${updRunErr.message}` }, 500);
     }
 
+    // Annuler tous les jobs en attente ET en cours (running détectera l'annulation au prochain check)
     const { error: updJobsErr } = await admin
       .from("sync_jobs")
       .update({
@@ -65,7 +66,7 @@ Deno.serve(async (req) => {
         updated_at: finishedAt,
       })
       .eq("run_id", run.id)
-      .in("status", ["queued", "retry"]);
+      .in("status", ["queued", "retry", "running"]);
 
     if (updJobsErr) {
       return jsonResponse({ error: `Erreur annulation jobs: ${updJobsErr.message}` }, 500);

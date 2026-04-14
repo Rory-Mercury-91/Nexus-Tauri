@@ -57,9 +57,8 @@ export async function detectResyncChanges(
       await new Promise(resolve => setTimeout(resolve, 350));
     }
     
-// Récupérer les données live de MAL/Jikan
 const [malData, jikanData] = await Promise.all([
-  source === "mal" ? fetchMalData() : null,
+  source === "mal" ? fetchMalData(malId, mediaType) : null,
   fetchJikanData(malId, mediaType),
 ]);
 
@@ -194,8 +193,12 @@ function mergeBySelectedFields(
   return merged;
 }
 
-// Ajout des underscores pour indiquer que les variables sont intentionnellement inutilisées pour le moment
-async function fetchMalData(): Promise<Record<string, unknown> | null> {
+/**
+ * TODO: implémenter l'appel MAL OAuth via Supabase Edge Function lorsque
+ * l'endpoint `/users/@me/animelist` ou `/manga/${malId}` sera exposé.
+ * Pour l'instant, seule la source Jikan (publique) est utilisée.
+ */
+async function fetchMalData(_malId: number, _mediaType: "anime" | "reading"): Promise<Record<string, unknown> | null> {
   return null;
 }
 

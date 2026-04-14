@@ -4,10 +4,8 @@ import { AddReadingModal } from "@/features/library/AddReadingModal/AddReadingMo
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
-import { LibrarySyncDiffModal } from "@/components/modals/LibrarySyncDiffModal/LibrarySyncDiffModal";
 import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import {
   deleteReadingEntry,
   fetchReadingCollection,
@@ -23,12 +21,7 @@ import {
   readCachedCollection,
   writeCachedCollection,
 } from "@/services/library/collectionCacheService";
-import { fetchSyncImportPreview } from "@/services/library/syncImportPreviewService";
-import type { SyncDiffField } from "@/services/library/syncDiffService";
 import { runNautiljonRefresh } from "@/services/library/nautiljonRefreshService";
-import type { SyncImportReportBundle, SyncSource } from "@/services/library/syncService";
-import { hasReadingImportReportContent } from "@/services/library/readingSyncImportReport";
-import { ReadingSyncImportReportBanner } from "@/features/library/ReadingSyncImportReportBanner/ReadingSyncImportReportBanner";
 import { notifyToast } from "@/lib/toastEvents";
 import { proxyNautiljonImage } from "@/lib/imageProxy";
 import {
@@ -141,16 +134,7 @@ export function ReadingCollectionPage() {
   const [pageSize, setPageSize] = useState<PageSizeValue>(25);
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
-  const { startSync, loading: syncLoading, activeRun, recentRuns } = useReadingSyncProgress();
-  const isSyncBusy = Boolean(
-    activeRun && (activeRun.status === "queued" || activeRun.status === "running")
-  );
-
-  const [reportBanner, setReportBanner] = useState<{
-    runId: string;
-    source: SyncSource;
-    report: SyncImportReportBundle;
-  } | null>(null);
+  const { activeRun } = useReadingSyncProgress();
 
   const [nautiljonRefreshing, setNautiljonRefreshing] = useState(false);
   const [showNautiljonPendingOnly, setShowNautiljonPendingOnly] = useState(false);
@@ -158,15 +142,6 @@ export function ReadingCollectionPage() {
   const [mihonSourceFilter, setMihonSourceFilter] = useState<string>("Tous");
   const [showDuplicateMalGroups, setShowDuplicateMalGroups] = useState(false);
   const [progressSourceMode, setProgressSourceMode] = useState<ProgressSourceMode>("auto");
-  const [integrationConnected, setIntegrationConnected] = useState({
-    mal: false,
-    anilist: false,
-  });
-  const [collectionSyncModalOpen, setCollectionSyncModalOpen] = useState(false);
-  const [collectionSyncSource, setCollectionSyncSource] = useState<"mal" | "anilist">("mal");
-  const [collectionSyncFields, setCollectionSyncFields] = useState<SyncDiffField[]>([]);
-  const [collectionSyncSelectedIds, setCollectionSyncSelectedIds] = useState<string[]>([]);
-  const [collectionSyncPreviewLoading, setCollectionSyncPreviewLoading] = useState(false);
 
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -231,58 +206,6 @@ export function ReadingCollectionPage() {
     }
     void loadCollection(false);
   }, [loadCollection]);
-
-  useEffect(() => {
-    const last = recentRuns.find((r) => r.status === "completed" && r.media_type === "reading");
-    if (!last?.import_report?.reading) {
-      setReportBanner(null);
-      return;
-    }
-    try {
-      if (sessionStorage.getItem(`reading:sync-report-dismissed:${last.id}`)) {
-        return;
-      }
-    } catch {
-      /* ignore */
-    }
-    const reading = last.import_report.reading;
-    if (!hasReadingImportReportContent(reading)) {
-      setReportBanner(null);
-      return;
-    }
-    setReportBanner({
-      runId: last.id,
-      source: last.source,
-      report: last.import_report as SyncImportReportBundle,
-    });
-  }, [recentRuns]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const supabase = getSupabaseClient();
-        const [malStatus, aniStatus] = await Promise.all([
-          fetchIntegrationStatus(supabase, "mal"),
-          fetchIntegrationStatus(supabase, "anilist"),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setIntegrationConnected({
-          mal: malStatus.ok && malStatus.status.connected,
-          anilist: aniStatus.ok && aniStatus.status.connected,
-        });
-      } catch {
-        if (!cancelled) {
-          setIntegrationConnected({ mal: false, anilist: false });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function updateUserStatus(itemId: number, status: StatusOption) {
     const target = items.find((entry) => entry.malId === itemId);
@@ -638,35 +561,6 @@ export function ReadingCollectionPage() {
     }
   }
 
-  async function openCollectionSyncPreview(source: "mal" | "anilist") {
-    setCollectionSyncSource(source);
-    setCollectionSyncPreviewLoading(true);
-    try {
-      const supabase = getSupabaseClient();
-      const { fields } = await fetchSyncImportPreview(supabase, { source, mediaType: "reading" });
-      setCollectionSyncFields(fields);
-      setCollectionSyncSelectedIds(fields.map((f) => f.id));
-      setCollectionSyncModalOpen(true);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Impossible de charger l'aperçu de synchronisation.";
-      setCollectionError(message);
-      notifyToast({ kind: "error", message });
-    } finally {
-      setCollectionSyncPreviewLoading(false);
-    }
-  }
-
-  async function confirmCollectionSync(source: "mal" | "anilist") {
-    try {
-      await startSync(source, { selectedFieldIds: collectionSyncSelectedIds });
-      setCollectionSyncModalOpen(false);
-      await loadCollection();
-      setCollectionError(null);
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Impossible de lancer la synchronisation.");
-    }
-  }
-
   function scrollToFilters() {
     if (!filterRef.current) {
       return;
@@ -694,36 +588,6 @@ export function ReadingCollectionPage() {
           <button
             type="button"
             className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.mal || collectionSyncPreviewLoading}
-            onClick={() => void openCollectionSyncPreview("mal")}
-            title={
-              !integrationConnected.mal
-                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
-                : isSyncBusy
-                  ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Aperçu puis synchronisation MAL"
-            }
-          >
-            {collectionSyncPreviewLoading && collectionSyncSource === "mal" ? "Aperçu…" : "Sync MAL"}
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist || collectionSyncPreviewLoading}
-            onClick={() => void openCollectionSyncPreview("anilist")}
-            title={
-              !integrationConnected.anilist
-                ? "Connecte d'abord AniList dans Paramètres > Intégrations."
-                : isSyncBusy
-                  ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Aperçu puis synchronisation AniList"
-            }
-          >
-            {collectionSyncPreviewLoading && collectionSyncSource === "anilist" ? "Aperçu…" : "Sync AniList"}
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
             disabled={nautiljonRefreshing}
             onClick={() => void refreshNautiljonFlags()}
             title="Vérifie les pages Nautiljon liées et marque les fiches à réimporter."
@@ -739,15 +603,6 @@ export function ReadingCollectionPage() {
         <p className="library-page-lead">
           Nautiljon: {nautiljonPendingCount} fiche(s) à réimporter manuellement.
         </p>
-      ) : null}
-
-      {reportBanner ? (
-        <ReadingSyncImportReportBanner
-          runId={reportBanner.runId}
-          source={reportBanner.source}
-          report={reportBanner.report}
-          onDismiss={() => setReportBanner(null)}
-        />
       ) : null}
 
       {collectionError ? <p className="library-page-lead">{collectionError}</p> : null}
@@ -1268,25 +1123,6 @@ export function ReadingCollectionPage() {
       </button>
 
       <AddReadingModal open={addOpen} onClose={() => setAddOpen(false)} />
-
-      <LibrarySyncDiffModal
-        open={collectionSyncModalOpen}
-        onClose={() => setCollectionSyncModalOpen(false)}
-        fields={collectionSyncFields}
-        selectedFieldIds={collectionSyncSelectedIds}
-        onToggleField={(fieldId, checked) => {
-          setCollectionSyncSelectedIds((prev) =>
-            checked ? (prev.includes(fieldId) ? prev : [...prev, fieldId]) : prev.filter((id) => id !== fieldId)
-          );
-        }}
-        onSelectAll={() => setCollectionSyncSelectedIds(collectionSyncFields.map((f) => f.id))}
-        onSelectNone={() => setCollectionSyncSelectedIds([])}
-        onSyncMal={() => void confirmCollectionSync("mal")}
-        onSyncAnilist={() => void confirmCollectionSync("anilist")}
-        syncing={syncLoading}
-        activeSource={collectionSyncSource}
-        lead="Aperçu agrégé (liste complète) : coche les types de mises à jour appliqués pendant la synchronisation (statut, titres). Une liste vide signifie déjà aligné sur le canon local pour ces critères."
-      />
     </div>
   );
 }

@@ -96,7 +96,7 @@ function mapWorkStatus(raw: unknown, fallbackWatchStatus: unknown): AnimeCollect
 export async function fetchAnimeCollection(supabase: SupabaseClient): Promise<AnimeCollectionEntry[]> {
   const { data, error } = await supabase
     .from("library_anime")
-    .select("id, mal_id, title, title_english, main_picture_url, watch_status, is_favorite, created_at, mal_official_snapshot, jikan_snapshot")
+    .select("id, mal_id, title, title_english, main_picture_url, watch_status, is_favorite, created_at, mal_official_snapshot, jikan_snapshot, watch_progress_by_source")
     .order("created_at", { ascending: false });
   if (error) {
     throw new Error(error.message);
@@ -111,7 +111,26 @@ export async function fetchAnimeCollection(supabase: SupabaseClient): Promise<An
     const listStatus = (listEntry.list_status ?? {}) as Record<string, unknown>;
     const myListStatus = (malSnapshot.my_list_status ?? {}) as Record<string, unknown>;
     const rawWatchStatus = (row.watch_status as string | null) ?? listStatus.status ?? myListStatus.status ?? null;
-    const progress = Number(listStatus.num_episodes_watched ?? 0);
+
+    // Source de vérité pour les épisodes vus : watch_progress_by_source.mal.episodes_watched
+    // en priorité, puis list_status.num_episodes_watched comme fallback.
+    const watchBySource = (row.watch_progress_by_source ?? {}) as Record<string, unknown>;
+    const malProgress = (watchBySource.mal ?? {}) as Record<string, unknown>;
+    const episodesWatchedFromProgress = Number(malProgress.episodes_watched ?? NaN);
+    const episodesWatchedFromSnapshot = Number(listStatus.num_episodes_watched ?? NaN);
+    let progress = Number.isFinite(episodesWatchedFromProgress)
+      ? episodesWatchedFromProgress
+      : Number.isFinite(episodesWatchedFromSnapshot)
+      ? episodesWatchedFromSnapshot
+      : 0;
+    // MAL quirk : pour les animés marqués "completed" sans suivi episode-par-episode,
+    // num_episodes_watched peut être 0 → on utilise le total comme valeur réelle.
+    if (progress === 0 && episodes > 0) {
+      const normalizedStatus = String(rawWatchStatus ?? "").toLowerCase().trim();
+      if (normalizedStatus === "completed") {
+        progress = episodes;
+      }
+    }
     const genres = Array.isArray(full.genres)
       ? (full.genres as Array<Record<string, unknown>>).map((g) => String(g.name ?? "")).filter(Boolean)
       : [];

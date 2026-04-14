@@ -1,40 +1,78 @@
 import { useEffect, useRef } from "react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import type { SyncMediaType } from "@/services/library/syncService";
+import type { SyncProgressRow, SyncRun } from "@/services/library/syncService";
 
-const DEBOUNCE_MS = 150;
+/** Row telle que reçue par Realtime (inclut run_id/user_id absents du type public). */
+export type RealtimeProgressRow = SyncProgressRow & { run_id: string; user_id: string };
+
+const RUN_DEBOUNCE_MS = 200;
 
 /**
- * Pousse un rafraîchissement dès que le worker met à jour `sync_runs` / `sync_progress` (Realtime).
+ * Abonnement Realtime unifié pour `sync_runs` et `sync_progress`.
+ *
+ * - `sync_progress` → payload.new envoyé directement à `onProgressRow` (0 aller-retour HTTP)
+ * - `sync_runs`     → déclenche `onRunChange` (rechargement complet pour les transitions d'état)
+ *
  * Nécessite que les tables soient dans `supabase_realtime` (voir `supabase/realtime_sync_tables.sql`).
  */
 export function useSyncProgressRealtime(
-  mediaType: SyncMediaType,
   enabled: boolean,
-  onRefresh: () => void | Promise<void>
+  onProgressRow: (row: RealtimeProgressRow) => void,
+  onRunChange: () => void | Promise<void>
 ): void {
-  const onRefreshRef = useRef(onRefresh);
-  const timerRef = useRef<number | null>(null);
+  const onProgressRef = useRef(onProgressRow);
+  const onRunChangeRef = useRef(onRunChange);
+  const runDebounceRef = useRef<number | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
-  useEffect(() => {
-    onRefreshRef.current = onRefresh;
-  }, [onRefresh]);
+  useEffect(() => { onProgressRef.current = onProgressRow; }, [onProgressRow]);
+  useEffect(() => { onRunChangeRef.current = onRunChange; }, [onRunChange]);
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
 
-    const schedule = () => {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
+    const scheduleRunChange = () => {
+      if (runDebounceRef.current !== null) {
+        window.clearTimeout(runDebounceRef.current);
       }
-      timerRef.current = window.setTimeout(() => {
-        timerRef.current = null;
-        void onRefreshRef.current();
-      }, DEBOUNCE_MS);
+      runDebounceRef.current = window.setTimeout(() => {
+        runDebounceRef.current = null;
+        void onRunChangeRef.current();
+      }, RUN_DEBOUNCE_MS);
+    };
+
+    const handleProgressChange = (
+      payload: RealtimePostgresChangesPayload<Record<string, unknown>>
+    ) => {
+      const row = payload.new as Record<string, unknown>;
+      if (!row || typeof row !== "object") return;
+      // Mapping direct depuis le payload Realtime → mise à jour d'état sans HTTP
+      const mapped: RealtimeProgressRow = {
+        run_id: String(row.run_id ?? ""),
+        user_id: String(row.user_id ?? ""),
+        stage: row.stage as SyncProgressRow["stage"],
+        total: Number(row.total ?? 0),
+        processed: Number(row.processed ?? 0),
+        created_count: Number(row.created_count ?? 0),
+        updated_count: Number(row.updated_count ?? 0),
+        error_count: Number(row.error_count ?? 0),
+        current_item_label: row.current_item_label != null ? String(row.current_item_label) : null,
+        rate_per_min: row.rate_per_min != null ? Number(row.rate_per_min) : null,
+        eta_seconds: row.eta_seconds != null ? Number(row.eta_seconds) : null,
+        updated_at: String(row.updated_at ?? ""),
+      };
+      if (mapped.run_id && mapped.stage) {
+        onProgressRef.current(mapped);
+      }
+    };
+
+    const handleRunChange = (
+      _payload: RealtimePostgresChangesPayload<Record<string, unknown>>
+    ) => {
+      scheduleRunChange();
     };
 
     let cancelled = false;
@@ -45,21 +83,19 @@ export function useSyncProgressRealtime(
         data: { session },
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      if (cancelled || !userId) {
-        return;
-      }
+      if (cancelled || !userId) return;
 
       const channel = supabase
-        .channel(`sync-progress:${mediaType}:${userId}`)
-        .on(
+        .channel(`sync-rt:${userId}`)
+        .on<Record<string, unknown>>(
           "postgres_changes",
           { event: "*", schema: "public", table: "sync_runs", filter: `user_id=eq.${userId}` },
-          schedule
+          handleRunChange
         )
-        .on(
+        .on<Record<string, unknown>>(
           "postgres_changes",
           { event: "*", schema: "public", table: "sync_progress", filter: `user_id=eq.${userId}` },
-          schedule
+          handleProgressChange
         )
         .subscribe();
 
@@ -72,15 +108,13 @@ export function useSyncProgressRealtime(
 
     return () => {
       cancelled = true;
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
+      if (runDebounceRef.current !== null) {
+        window.clearTimeout(runDebounceRef.current);
+        runDebounceRef.current = null;
       }
       const ch = channelRef.current;
       channelRef.current = null;
-      if (ch) {
-        void supabase.removeChannel(ch);
-      }
+      if (ch) void supabase.removeChannel(ch);
     };
-  }, [enabled, mediaType]);
+  }, [enabled]);
 }

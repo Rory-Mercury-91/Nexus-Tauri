@@ -164,13 +164,16 @@ function mergeJikanFullBySelection(
 const JIKAN_API = "https://api.jikan.moe/v4";
 const MAL_API = "https://api.myanimelist.net/v2";
 const MAX_RETRIES = 3;
-const MAX_JOBS_PER_TICK = 25;
+const MAX_JOBS_PER_TICK = 1; // 1 job/tick evite le timeout Edge Function
 /** Jobs « running » sans mise à jour (crash / timeout Edge) → repasse en retry après ce délai. */
-const RUNNING_STALE_MS = 3 * 60 * 1000;
+const RUNNING_STALE_MS = 75_000; // 75 s < timeout Edge (~150 s)
 /** Lots courts : un job d’import doit finir sous la limite Edge (~150s) ; 100 lignes × plusieurs allers-retours DB dépassaient souvent. */
 const IMPORT_PAGE_SIZE = 25;
-const IMPORT_ANILIST_CHUNK_SIZE = 25;
+/** AniList charge moins de données par entrée (pas d'enrichissement Jikan à ce stade) ; 100 est sûr sous la limite Edge. */
+const IMPORT_ANILIST_CHUNK_SIZE = 100;
 const MAX_EPISODE_PAGES = 40;
+/** Timeout des appels HTTP externes (MAL, AniList, Jikan, Google Translate). */
+const FETCH_TIMEOUT_MS = 25_000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -185,12 +188,23 @@ async function isRunCancelled(runId: string): Promise<boolean> {
 }
 
 async function fetchJson(url: string, init?: RequestInit) {
-  const resp = await fetch(url, init);
-  const text = await resp.text();
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status} ${text.slice(0, 300)}`);
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { ...init, signal: controller.signal });
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status} ${text.slice(0, 300)}`);
+    }
+    return JSON.parse(text) as unknown;
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(`Timeout (${FETCH_TIMEOUT_MS / 1000}s) sur ${url.split("?")[0]}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(tid);
   }
-  return JSON.parse(text) as unknown;
 }
 
 async function upsertProgress(
@@ -213,17 +227,39 @@ async function upsertProgress(
     .eq("run_id", runId)
     .eq("stage", stage)
     .maybeSingle();
+
+  const rawProcessed = patch.processed ?? current?.processed ?? 0;
+  // Le total ne peut jamais être inférieur au nombre d'éléments réellement traités.
+  const total = Math.max(patch.total ?? current?.total ?? 0, rawProcessed);
+  const processed = rawProcessed;
+
+  // Calcul du débit et de l'ETA à partir des timestamps en base
+  let ratePerMin: number | null = null;
+  let etaSeconds: number | null = null;
+  if (current?.updated_at && processed > 0 && total > processed) {
+    const prevProcessed: number = current?.processed ?? 0;
+    const deltaProcessed = processed - prevProcessed;
+    const prevUpdatedMs = new Date(current.updated_at as string).getTime();
+    const elapsedMs = Date.now() - prevUpdatedMs;
+    if (deltaProcessed > 0 && elapsedMs > 500) {
+      ratePerMin = (deltaProcessed / elapsedMs) * 60_000;
+      etaSeconds = Math.round(((total - processed) / ratePerMin) * 60);
+    }
+  }
+
   await admin.from("sync_progress").upsert(
     {
       run_id: runId,
       user_id: userId,
       stage,
-      total: patch.total ?? current?.total ?? 0,
-      processed: patch.processed ?? current?.processed ?? 0,
+      total,
+      processed,
       created_count: patch.created_count ?? current?.created_count ?? 0,
       updated_count: patch.updated_count ?? current?.updated_count ?? 0,
       error_count: patch.error_count ?? current?.error_count ?? 0,
       current_item_label: patch.current_item_label ?? current?.current_item_label ?? null,
+      rate_per_min: ratePerMin,
+      eta_seconds: etaSeconds,
       updated_at: nowIso(),
     },
     { onConflict: "run_id,stage" }
@@ -294,12 +330,36 @@ async function claimNextJob(): Promise<JobRow | null> {
       .eq("status", "running");
   }
 
+  // Exécution séquentielle : import d'abord, puis enrich, puis translate.
+  // On ne démarre l'enrich que quand tous les imports sont terminés,
+  // et la traduction que quand tous les enrichissements sont terminés.
+  const nowStr = nowIso();
+  const { count: importPending } = await admin
+    .from("sync_jobs")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["queued", "retry"])
+    .lte("available_at", nowStr)
+    .eq("stage", "import");
+  let allowedStages: string[];
+  if ((importPending ?? 0) > 0) {
+    allowedStages = ["import"];
+  } else {
+    const { count: enrichPending } = await admin
+      .from("sync_jobs")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["queued", "retry"])
+      .lte("available_at", nowStr)
+      .eq("stage", "enrich");
+    allowedStages = (enrichPending ?? 0) > 0 ? ["enrich"] : ["translate"];
+  }
+
   for (let attempt = 0; attempt < 16; attempt += 1) {
     const { data: candidate } = await admin
       .from("sync_jobs")
       .select("id, run_id, user_id, stage, attempts, payload, status, available_at")
       .in("status", ["queued", "retry"])
-      .lte("available_at", nowIso())
+      .in("stage", allowedStages)
+      .lte("available_at", nowStr)
       .order("id", { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -348,6 +408,39 @@ async function claimNextJob(): Promise<JobRow | null> {
     return locked as JobRow;
   }
   return null;
+}
+
+/**
+ * Compte le nombre total d'entrées MAL sans charger les données complètes.
+ * Utilise limit=1000 pour minimiser le nombre d'appels API (1 appel pour la plupart des utilisateurs).
+ * Champs minimaux (list_status uniquement) pour réduire la taille des réponses.
+ */
+async function countMalItems(accessToken: string, mediaType: "anime" | "reading", runId: string): Promise<number> {
+  const baseUrl = mediaType === "reading"
+    ? `${MAL_API}/users/@me/mangalist`
+    : `${MAL_API}/users/@me/animelist`;
+  const COUNT_LIMIT = 1000;
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    // Vérification avant chaque appel API pour réagir rapidement à une annulation
+    if (await isRunCancelled(runId)) {
+      throw new Error(RUN_CANCELLED_MSG);
+    }
+    const url = new URL(baseUrl);
+    url.searchParams.set("limit", String(COUNT_LIMIT));
+    url.searchParams.set("offset", String(offset));
+    url.searchParams.set("fields", "list_status");
+    url.searchParams.set("nsfw", "true");
+    const json = (await fetchJson(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })) as { data?: Array<unknown>; paging?: { next?: string } };
+    const rows = json.data ?? [];
+    count += rows.length;
+    if (!json.paging?.next || rows.length === 0) break;
+    offset += COUNT_LIMIT;
+  }
+  return count;
 }
 
 async function mapMalPage(accessToken: string, offset: number, limit = IMPORT_PAGE_SIZE) {
@@ -552,6 +645,52 @@ async function processImport(job: JobRow) {
   if (connError || !conn?.access_token) {
     throw new Error(`Connexion ${source} manquante.`);
   }
+
+  /**
+   * Phase prefetch (uniquement pour MAL sans cible précise) :
+   * Compte le total exact en 1-2 appels avec limit=1000, puis crée tous les jobs
+   * d'import avec known_total en payload. Garantit X/Y toujours correct.
+   */
+  if (job.payload.is_prefetch === true) {
+    await upsertProgress(job.run_id, job.user_id, "import", {
+      total: 0,
+      processed: 0,
+      created_count: 0,
+      updated_count: 0,
+      error_count: 0,
+      current_item_label: "Décompte de la liste…",
+    });
+    const knownTotal = await countMalItems(conn.access_token, mediaType, job.run_id);
+    await upsertProgress(job.run_id, job.user_id, "import", {
+      total: knownTotal,
+      processed: 0,
+      current_item_label: null,
+    });
+    // Créer tous les jobs d'import paginés avec le total connu
+    let offset = 0;
+    const ts = nowIso();
+    while (offset < knownTotal) {
+      const importJobPayload: Record<string, unknown> = {
+        source,
+        media_type: mediaType,
+        offset,
+        selected_field_ids: selectedFieldIds,
+        known_total: knownTotal,
+      };
+      await admin.from("sync_jobs").insert({
+        run_id: job.run_id,
+        user_id: job.user_id,
+        stage: "import",
+        status: "queued",
+        attempts: 0,
+        payload: importJobPayload,
+        available_at: ts,
+      });
+      offset += IMPORT_PAGE_SIZE;
+    }
+    return; // Prefetch terminé, les jobs d'import prendront le relais
+  }
+
   const { data: currentImportProgress } = await admin
     .from("sync_progress")
     .select("total, processed, created_count, updated_count, error_count")
@@ -569,6 +708,10 @@ async function processImport(job: JobRow) {
   if (source === "mal") {
     const offset = Number(job.payload.offset ?? 0);
     const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+    // Vérification avant l'appel API MAL (peut durer jusqu'à 25 s)
+    if (await isRunCancelled(job.run_id)) {
+      throw new Error(RUN_CANCELLED_MSG);
+    }
     const page =
       mediaType === "reading"
         ? await mapMalReadingPage(conn.access_token, safeOffset)
@@ -578,16 +721,23 @@ async function processImport(job: JobRow) {
     // Hint progressif sans sur-gonfler le total: offset parcouru + taille page (+1 si page suivante).
     batchTotalHint = safeOffset + rows.length + (hasNextImportBatch ? 1 : 0);
     if (hasNextImportBatch) {
+      const rawKnownTotal = Number(job.payload.known_total ?? 0);
       nextPayload = {
         source,
         media_type: mediaType,
         offset: safeOffset + IMPORT_PAGE_SIZE,
         selected_field_ids: selectedFieldIds,
         ...(hasTarget ? { target_mal_id: targetMalId } : {}),
+        // Propager le total connu aux jobs suivants
+        ...(rawKnownTotal > 0 ? { known_total: rawKnownTotal } : {}),
       };
     }
   } else {
     const startIndex = Number(job.payload.start_index ?? 0);
+    // Vérification avant l'appel API AniList (charge toute la liste)
+    if (await isRunCancelled(job.run_id)) {
+      throw new Error(RUN_CANCELLED_MSG);
+    }
     const allRows =
       mediaType === "reading"
         ? await mapAniListReadingRows(conn.access_token)
@@ -623,7 +773,14 @@ async function processImport(job: JobRow) {
       }
     }
   }
-  const importTotal = Math.max(currentImportProgress?.total ?? 0, batchTotalHint, processed);
+  /**
+   * known_total (injecté par le job prefetch) est la source de vérité pour MAL.
+   * Pour AniList, batchTotalHint = allRows.length est toujours exact dès le premier job.
+   */
+  const knownTotal = Number(job.payload.known_total ?? 0);
+  const importTotal = knownTotal > 0
+    ? Math.max(knownTotal, processed)
+    : Math.max(currentImportProgress?.total ?? 0, batchTotalHint, processed);
   await upsertProgress(job.run_id, job.user_id, "import", {
     total: importTotal,
     processed,
@@ -675,9 +832,15 @@ async function processImport(job: JobRow) {
   /** Enrich/traduction en fin de lot : le job « import » suivant doit être inséré avant (id plus petit) pour finir toute la liste avant Jikan. */
   const deferredEnrich: Array<{ mal_id: number; title: string; media_type: "anime" | "reading" }> = [];
   const deferredTranslate: Array<{ mal_id: number; title: string; media_type: "anime" | "reading" }> = [];
+  let importLoopCount = 0;
   for (const row of rows) {
+    importLoopCount += 1;
     if (await isRunCancelled(job.run_id)) {
       throw new Error(RUN_CANCELLED_MSG);
+    }
+    // Heartbeat toutes les 5 entrées : empêche le stale detector de basculer le job en retry pendant un long batch.
+    if (importLoopCount % 5 === 0) {
+      await admin.from("sync_jobs").update({ updated_at: nowIso() }).eq("id", job.id).eq("status", "running");
     }
     const node = source === "mal" ? (row.node as Record<string, unknown> | undefined) : (row.media as Record<string, unknown> | undefined);
 
@@ -1227,7 +1390,12 @@ async function processImport(job: JobRow) {
   if (await isRunCancelled(job.run_id)) {
     throw new Error(RUN_CANCELLED_MSG);
   }
-  if (nextPayload) {
+  /**
+   * Si known_total est présent, tous les jobs d'import ont déjà été créés par le prefetch.
+   * Ne pas en créer un nouveau ici pour éviter les doublons.
+   */
+  const hasKnownTotal = Number(job.payload.known_total ?? 0) > 0;
+  if (nextPayload && !hasKnownTotal) {
     await admin.from("sync_jobs").insert({
       run_id: job.run_id,
       user_id: job.user_id,
@@ -1426,12 +1594,14 @@ async function completeOrFailRun(runId: string) {
   if (String(run?.status ?? "") === "cancelled") {
     return;
   }
-  const { data: jobs } = await admin.from("sync_jobs").select("status").eq("run_id", runId);
-  const statuses = (jobs ?? []).map((j) => String(j.status));
-  if (statuses.some((s) => s === "queued" || s === "running" || s === "retry")) {
+  const { data: jobs } = await admin.from("sync_jobs").select("status, stage").eq("run_id", runId);
+  const jobRows = (jobs ?? []).map((j) => ({ status: String(j.status), stage: String(j.stage) }));
+  if (jobRows.some((j) => j.status === "queued" || j.status === "running" || j.status === "retry")) {
     return;
   }
-  const failed = statuses.some((s) => s === "failed");
+  // Seuls les échecs d'import sont rédhibitoires : les jobs enrich/translate en erreur
+  // produisent des données partiellement enrichies mais n'invalident pas l'ensemble du run.
+  const failed = jobRows.some((j) => j.stage === "import" && j.status === "failed");
   const rawReport = (run?.import_report as Record<string, unknown> | undefined) ?? {};
   const nextReport = { ...rawReport };
   for (const ns of ["reading", "anime"] as const) {

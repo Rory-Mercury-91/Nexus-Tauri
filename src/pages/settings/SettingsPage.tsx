@@ -34,6 +34,7 @@ import { ReadingListsComparePanel } from "./ReadingListsComparePanel";
 import { MihonSettingsPanel } from "./MihonSettingsPanel";
 import { SecurityLogsPanel } from "./SecurityLogsPanel";
 import { DebugJsonDiffPanel } from "./DebugJsonDiffPanel";
+import { SyncReportPanel } from "./SyncReportPanel";
 import "./SettingsPage.css";
 
 const DEFAULT_INTEGRATION_STATUS: IntegrationConnectionStatus = {
@@ -49,6 +50,7 @@ type SettingsTab =
   | "security"
   | "family"
   | "integrations"
+  | "sync"
   | "reading-lists"
   | "mihon"
   | "logs"
@@ -381,6 +383,18 @@ export function SettingsPage() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "sync"}
+          className={tab === "sync" ? "settings-tab settings-tab-active" : "settings-tab"}
+          onClick={() => {
+            setTab("sync");
+            clearFeedback();
+          }}
+        >
+          Rapports sync
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "reading-lists"}
           className={
             tab === "reading-lists" ? "settings-tab settings-tab-active" : "settings-tab"
@@ -445,7 +459,11 @@ export function SettingsPage() {
       {error ? <p className="settings-error">{error}</p> : null}
       {message ? <p className="settings-success">{message}</p> : null}
 
-      {tab === "family" ? (
+      {tab === "sync" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <SyncReportPanel />
+        </div>
+      ) : tab === "family" ? (
         <div className="settings-tab-panel" role="tabpanel">
           <FamilySettingsPanel />
         </div>

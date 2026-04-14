@@ -7,7 +7,6 @@ import { NautiljonImportReceptionModal } from "@/components/modals/NautiljonImpo
 import { AuthModalProvider } from "@/contexts/AuthModalProvider";
 import { DataFetchOverlayProvider } from "@/contexts/DataFetchOverlayContext";
 import { SyncProgressProvider } from "@/contexts/SyncProgressContext";
-import { ReadingSyncProgressProvider } from "@/contexts/ReadingSyncProgressContext";
 import { SessionProvider } from "@/contexts/SessionProvider";
 import { AppShell } from "@/layout/AppShell/AppShell";
 import {
@@ -163,7 +162,6 @@ function AppRoutes() {
   return (
     <DataFetchOverlayProvider>
       <SyncProgressProvider>
-        <ReadingSyncProgressProvider>
           <AppShell
             displayName={displayName}
             email={session.user.email ?? null}
@@ -201,7 +199,6 @@ function AppRoutes() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           </AppShell>
-        </ReadingSyncProgressProvider>
       </SyncProgressProvider>
     </DataFetchOverlayProvider>
   );

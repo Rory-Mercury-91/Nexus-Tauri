@@ -78,17 +78,43 @@ function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function resolveEpisodesWatched(row: Record<string, unknown>, total: number): number {
+  // Priorité : watch_progress_by_source.mal.episodes_watched
+  const watchBySource = (row.watch_progress_by_source ?? {}) as Record<string, unknown>;
+  const malProgress = (watchBySource.mal ?? {}) as Record<string, unknown>;
+  const fromProgress = Number(malProgress.episodes_watched ?? NaN);
+
+  // Fallback : mal_official_snapshot.list_entry.list_status.num_episodes_watched
+  const malSnapshot = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
+  const listEntry = (malSnapshot.list_entry ?? {}) as Record<string, unknown>;
+  const listStatus = (listEntry.list_status ?? {}) as Record<string, unknown>;
+  const fromSnapshot = Number(listStatus.num_episodes_watched ?? NaN);
+
+  let watched = Number.isFinite(fromProgress) ? fromProgress
+    : Number.isFinite(fromSnapshot) ? fromSnapshot
+    : 0;
+
+  // MAL quirk : animé "completed" sans suivi ep-par-ep → num_episodes_watched = 0
+  if (watched === 0 && total > 0) {
+    const watchStatus = safeString(row.watch_status || listStatus.status).trim().toLowerCase();
+    if (watchStatus === "completed") {
+      watched = total;
+    }
+  }
+  return watched;
+}
+
 function parseAnimeProgress(row: Record<string, unknown>) {
   const malSnapshot = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
   const jikanSnapshot = (row.jikan_snapshot ?? {}) as Record<string, unknown>;
   const full = (jikanSnapshot.full ?? {}) as Record<string, unknown>;
   const listEntry = (malSnapshot.list_entry ?? {}) as Record<string, unknown>;
   const listStatus = (listEntry.list_status ?? {}) as Record<string, unknown>;
-  const watched = toNumber(listStatus.num_episodes_watched);
   const total =
     toNumber(full.episodes) ||
     toNumber(malSnapshot.num_episodes) ||
     toNumber(listEntry.num_episodes);
+  const watched = resolveEpisodesWatched(row, total);
   const watchStatus = safeString(row.watch_status || listStatus.status).trim().toLowerCase();
   const completedSeries = watchStatus === "completed" ? 1 : 0;
   return {
@@ -133,10 +159,8 @@ function buildRecentAnimeEntry(row: Record<string, unknown>): LibraryRecentEntry
   const malSnapshot = (row.mal_official_snapshot ?? {}) as Record<string, unknown>;
   const jikanSnapshot = (row.jikan_snapshot ?? {}) as Record<string, unknown>;
   const full = (jikanSnapshot.full ?? {}) as Record<string, unknown>;
-  const listEntry = (malSnapshot.list_entry ?? {}) as Record<string, unknown>;
-  const listStatus = (listEntry.list_status ?? {}) as Record<string, unknown>;
-  const seen = toNumber(listStatus.num_episodes_watched);
   const total = toNumber(full.episodes) || toNumber(malSnapshot.num_episodes);
+  const seen = resolveEpisodesWatched(row, total);
   const pct = toPercent(seen, total);
   const imageUrl =
     safeString(row.main_picture_url) ||
@@ -208,7 +232,7 @@ export async function loadLibraryProgressSnapshot(
   const [animeRes, readingRes] = await Promise.all([
     supabase
       .from("library_anime")
-      .select("mal_id, title, main_picture_url, watch_status, created_at, updated_at, mal_official_snapshot, jikan_snapshot")
+      .select("mal_id, title, main_picture_url, watch_status, created_at, updated_at, mal_official_snapshot, jikan_snapshot, watch_progress_by_source")
       .eq("user_id", userId),
     supabase
       .from("library_reading")

@@ -3,11 +3,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AddAnimeModal } from "@/features/library/AddAnimeModal/AddAnimeModal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
-import { LibrarySyncDiffModal } from "@/components/modals/LibrarySyncDiffModal/LibrarySyncDiffModal";
-import { useSyncProgress } from "@/contexts/SyncProgressContext";
 import { notifyToast } from "@/lib/toastEvents";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import { fetchIntegrationStatus } from "@/services/integrations/integrationService";
 import {
   fetchAnimeCollection,
   fetchAnimeCollectionStamp,
@@ -21,8 +18,6 @@ import {
   readCachedCollection,
   writeCachedCollection,
 } from "@/services/library/collectionCacheService";
-import { fetchSyncImportPreview } from "@/services/library/syncImportPreviewService";
-import type { SyncDiffField } from "@/services/library/syncDiffService";
 import {
   getMainScrollContainer,
   readMainScrollTop,
@@ -199,15 +194,6 @@ export function AnimeCollectionPage() {
   const [items, setItems] = useState<AnimeItem[]>([]);
   const [loadingCollection, setLoadingCollection] = useState(false);
   const [collectionError, setCollectionError] = useState<string | null>(null);
-  const { startSync, loading: syncLoading, activeRun } = useSyncProgress();
-  const isSyncBusy = Boolean(
-    activeRun && (activeRun.status === "queued" || activeRun.status === "running")
-  );
-  const [collectionSyncModalOpen, setCollectionSyncModalOpen] = useState(false);
-  const [collectionSyncSource, setCollectionSyncSource] = useState<"mal" | "anilist">("mal");
-  const [collectionSyncFields, setCollectionSyncFields] = useState<SyncDiffField[]>([]);
-  const [collectionSyncSelectedIds, setCollectionSyncSelectedIds] = useState<string[]>([]);
-  const [collectionSyncPreviewLoading, setCollectionSyncPreviewLoading] = useState(false);
   const [tabType, setTabType] = useState<string>("Tous");
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -227,10 +213,6 @@ export function AnimeCollectionPage() {
   
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
-  const [integrationConnected, setIntegrationConnected] = useState({
-    mal: false,
-    anilist: false,
-  });
   const filterRef = useRef<HTMLDivElement | null>(null);
   const lazySentinelRef = useRef<HTMLDivElement | null>(null);
   const [lazyVisibleCount, setLazyVisibleCount] = useState(30);
@@ -277,35 +259,6 @@ export function AnimeCollectionPage() {
     }
   }, []);
   
-  async function openCollectionSyncPreview(source: "mal" | "anilist") {
-    setCollectionSyncSource(source);
-    setCollectionSyncPreviewLoading(true);
-    try {
-      const supabase = getSupabaseClient();
-      const { fields } = await fetchSyncImportPreview(supabase, { source, mediaType: "anime" });
-      setCollectionSyncFields(fields);
-      setCollectionSyncSelectedIds(fields.map((f) => f.id));
-      setCollectionSyncModalOpen(true);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Impossible de charger l'aperçu de synchronisation.";
-      setCollectionError(message);
-      notifyToast({ kind: "error", message });
-    } finally {
-      setCollectionSyncPreviewLoading(false);
-    }
-  }
-
-  async function confirmCollectionSync(source: "mal" | "anilist") {
-    try {
-      await startSync(source, { selectedFieldIds: collectionSyncSelectedIds });
-      setCollectionSyncModalOpen(false);
-      await loadCollection();
-      setCollectionError(null);
-    } catch (e) {
-      setCollectionError(e instanceof Error ? e.message : "Impossible de lancer la synchronisation.");
-    }
-  }
-
   useEffect(() => {
     const cached = readCachedCollection<AnimeItem>(ANIME_COLLECTION_CACHE_KEY);
     if (cached) {
@@ -314,32 +267,6 @@ export function AnimeCollectionPage() {
     void loadCollection(false);
   }, [loadCollection]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const supabase = getSupabaseClient();
-        const [malStatus, aniStatus] = await Promise.all([
-          fetchIntegrationStatus(supabase, "mal"),
-          fetchIntegrationStatus(supabase, "anilist"),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setIntegrationConnected({
-          mal: malStatus.ok && malStatus.status.connected,
-          anilist: aniStatus.ok && aniStatus.status.connected,
-        });
-      } catch {
-        if (!cancelled) {
-          setIntegrationConnected({ mal: false, anilist: false });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -610,36 +537,6 @@ export function AnimeCollectionPage() {
         <div className="anime-collection-head-actions">
           <button type="button" className="anime-collection-btn" onClick={() => void loadCollection(true)}>
             Recharger
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.mal || collectionSyncPreviewLoading}
-            onClick={() => void openCollectionSyncPreview("mal")}
-            title={
-              !integrationConnected.mal
-                ? "Connecte d'abord MyAnimeList dans Paramètres > Intégrations."
-                : isSyncBusy
-                  ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Aperçu puis synchronisation MAL"
-            }
-          >
-            {collectionSyncPreviewLoading && collectionSyncSource === "mal" ? "Aperçu…" : "Sync MAL"}
-          </button>
-          <button
-            type="button"
-            className="anime-collection-btn"
-            disabled={syncLoading || isSyncBusy || !integrationConnected.anilist || collectionSyncPreviewLoading}
-            onClick={() => void openCollectionSyncPreview("anilist")}
-            title={
-              !integrationConnected.anilist
-                ? "Connecte d'abord AniList dans Paramètres > Intégrations."
-                : isSyncBusy
-                  ? "Synchronisation en cours, merci d'attendre la fin."
-                  : "Aperçu puis synchronisation AniList"
-            }
-          >
-            {collectionSyncPreviewLoading && collectionSyncSource === "anilist" ? "Aperçu…" : "Sync AniList"}
           </button>
           <button type="button" className="library-add-anime-btn" onClick={() => setAddOpen(true)}>
             + Ajouter un animé
@@ -1035,25 +932,6 @@ export function AnimeCollectionPage() {
       </button>
 
       <AddAnimeModal open={addOpen} onClose={() => setAddOpen(false)} />
-
-      <LibrarySyncDiffModal
-        open={collectionSyncModalOpen}
-        onClose={() => setCollectionSyncModalOpen(false)}
-        fields={collectionSyncFields}
-        selectedFieldIds={collectionSyncSelectedIds}
-        onToggleField={(fieldId, checked) => {
-          setCollectionSyncSelectedIds((prev) =>
-            checked ? (prev.includes(fieldId) ? prev : [...prev, fieldId]) : prev.filter((id) => id !== fieldId)
-          );
-        }}
-        onSelectAll={() => setCollectionSyncSelectedIds(collectionSyncFields.map((f) => f.id))}
-        onSelectNone={() => setCollectionSyncSelectedIds([])}
-        onSyncMal={() => void confirmCollectionSync("mal")}
-        onSyncAnilist={() => void confirmCollectionSync("anilist")}
-        syncing={syncLoading}
-        activeSource={collectionSyncSource}
-        lead="Aperçu agrégé (liste complète) : coche les types de mises à jour appliqués pendant la synchronisation (statut, titres). Une liste vide signifie déjà aligné sur le canon local pour ces critères."
-      />
 
       {isHelpOpen ? (
         <div className="anime-collection-help-backdrop" role="presentation" onMouseDown={() => setIsHelpOpen(false)}>

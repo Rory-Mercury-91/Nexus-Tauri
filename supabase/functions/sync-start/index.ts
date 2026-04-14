@@ -120,6 +120,15 @@ Deno.serve(async (req) => {
     if (targetMalIdSafe != null) {
       importPayload.target_mal_id = targetMalIdSafe;
     }
+    /**
+     * Pour MAL sans cible précise : premier job = prefetch (comptage uniquement).
+     * Le prefetch va créer tous les jobs d'import avec le total exact en payload,
+     * ce qui garantit X/Y toujours correct dès le début du traitement.
+     * AniList n'en a pas besoin (charge toute la liste en mémoire dès le premier job).
+     */
+    if (source === "mal" && targetMalIdSafe == null) {
+      importPayload.is_prefetch = true;
+    }
     const { error: queueErr } = await admin.from("sync_jobs").insert({
       run_id: run.id,
       user_id: userId,

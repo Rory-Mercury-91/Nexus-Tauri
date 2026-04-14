@@ -156,11 +156,7 @@ export async function getReadingSyncStatus(supabase: SupabaseClient): Promise<Sy
   };
 }
 
-export async function tickAnimeSyncWorker(supabase: SupabaseClient): Promise<void> {
-  await invokeEdgeFunction(supabase, "sync-worker", {});
-}
-
-export async function tickReadingSyncWorker(supabase: SupabaseClient): Promise<void> {
+export async function tickSyncWorker(supabase: SupabaseClient): Promise<void> {
   await invokeEdgeFunction(supabase, "sync-worker", {});
 }
 

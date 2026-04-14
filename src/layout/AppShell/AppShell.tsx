@@ -12,8 +12,6 @@ import { NavLink } from "react-router-dom";
 import { NexusLogo } from "@/components/common/NexusLogo";
 import { ProfileAvatarImage } from "@/components/common/ProfileAvatarImage";
 import { SyncProgressSidebar } from "@/components/layout/SyncProgressSidebar";
-import { useReadingSyncProgress } from "@/contexts/ReadingSyncProgressContext";
-import { useSyncProgress } from "@/contexts/SyncProgressContext";
 import { closeMainWindow, minimizeMainWindow } from "@/lib/tauriWindow";
 import "./AppShell.css";
 
@@ -35,42 +33,6 @@ export function AppShell({
   avatarRevision,
   onSignOut,
 }: AppShellProps) {
-  const { activeRun: animeRun, recentRuns: animeRuns } = useSyncProgress();
-  const { activeRun: readingRun, recentRuns: readingRuns } = useReadingSyncProgress();
-  const animeLastSync = animeRuns.find((run) => run.status === "completed")?.finished_at ?? null;
-  const readingLastSync = readingRuns.find((run) => run.status === "completed")?.finished_at ?? null;
-  const animeInProgress = Boolean(animeRun && (animeRun.status === "queued" || animeRun.status === "running"));
-  const readingInProgress = Boolean(readingRun && (readingRun.status === "queued" || readingRun.status === "running"));
-
-  function freshnessStatus(lastSyncIso: string | null, inProgress: boolean): "running" | "fresh" | "stale" {
-    if (inProgress) return "running";
-    if (!lastSyncIso) return "stale";
-    const delta = Date.now() - new Date(lastSyncIso).getTime();
-    return delta <= 70 * 60 * 1000 ? "fresh" : "stale";
-  }
-
-  function freshnessLabel(status: "running" | "fresh" | "stale"): string {
-    if (status === "running") return "Sync en cours";
-    if (status === "fresh") return "A jour";
-    return "Mise a jour en attente";
-  }
-
-  const animeFreshness = freshnessStatus(animeLastSync, animeInProgress);
-  const readingFreshness = freshnessStatus(readingLastSync, readingInProgress);
-  const animeLastSyncLabel = animeLastSync
-    ? new Date(animeLastSync).toLocaleString("fr-FR")
-    : "Aucune synchronisation terminee";
-  const readingLastSyncLabel = readingLastSync
-    ? new Date(readingLastSync).toLocaleString("fr-FR")
-    : "Aucune synchronisation terminee";
-  const readingNautiljonAutoLabel = (() => {
-    const raw = localStorage.getItem("nautiljon:auto:last-run:reading");
-    const ms = Number(raw ?? 0);
-    if (!Number.isFinite(ms) || ms <= 0) {
-      return "Jamais controle";
-    }
-    return new Date(ms).toLocaleString("fr-FR");
-  })();
 
   return (
     <div className="app-shell">
@@ -107,23 +69,6 @@ export function AppShell({
             </button>
           </div>
         </div>
-        <div className="app-shell-freshness" aria-label="Etat des synchronisations">
-          <div className={`app-shell-freshness-badge is-${animeFreshness}`}>
-            <span className="app-shell-freshness-text">Anime: {freshnessLabel(animeFreshness)}</span>
-            <span className="app-shell-freshness-tooltip" role="tooltip">
-              Derniere sync anime: {animeLastSyncLabel}
-            </span>
-          </div>
-          <div className={`app-shell-freshness-badge is-${readingFreshness}`}>
-            <span className="app-shell-freshness-text">Lecture: {freshnessLabel(readingFreshness)}</span>
-            <span className="app-shell-freshness-tooltip" role="tooltip">
-              Derniere sync lecture: {readingLastSyncLabel}
-              <br />
-              Dernier controle Nautiljon auto: {readingNautiljonAutoLabel}
-            </span>
-          </div>
-        </div>
-
         <nav className="app-shell-nav">
           <NavLink
             to="/"
