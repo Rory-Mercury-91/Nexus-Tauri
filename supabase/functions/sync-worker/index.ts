@@ -845,9 +845,22 @@ async function processImport(job: JobRow) {
     const node = source === "mal" ? (row.node as Record<string, unknown> | undefined) : (row.media as Record<string, unknown> | undefined);
 
     // Priorité MAL : une entrée AniList avec idMal se synchronise via MAL, pas depuis ce flux.
+    // On pose uniquement le flag anilist_media_id sur la fiche MAL existante (cross-référencement).
     if (source === "anilist" && (mediaType === "reading" || mediaType === "anime")) {
       const idMalAni = Number(node?.idMal);
       if (Number.isFinite(idMalAni) && idMalAni > 0) {
+        const anilistIdForFlag = Number(node?.id);
+        if (Number.isFinite(anilistIdForFlag) && anilistIdForFlag > 0) {
+          const flagTable = mediaType === "reading" ? "library_reading" : "library_anime";
+          const malIdCol = mediaType === "reading" ? "mal_manga_id" : "mal_id";
+          // Mise à jour uniquement si anilist_media_id n'est pas encore renseigné sur la fiche MAL.
+          await admin
+            .from(flagTable)
+            .update({ anilist_media_id: anilistIdForFlag })
+            .eq("user_id", job.user_id)
+            .eq(malIdCol, idMalAni)
+            .is("anilist_media_id", null);
+        }
         const ns: ImportReportNs = mediaType === "reading" ? "reading" : "anime";
         await mergeImportReport(job.run_id, { [ns]: { anilist_skipped_has_mal_id: 1 } });
         processed += 1;
@@ -857,7 +870,7 @@ async function processImport(job: JobRow) {
           created_count: created,
           updated_count: updated,
           error_count: currentImportProgress?.error_count ?? 0,
-          current_item_label: `AniList (MAL ID ${idMalAni} → sync MAL)`,
+          current_item_label: `AniList (MAL ID ${idMalAni} → flag)`,
         });
         continue;
       }

@@ -13,14 +13,15 @@ import {
 } from "@/services/library/mihonSourceIndexService";
 import {
   importMihonBackupFile,
-  type MihonImportProgress,
   type MihonImportResult,
 } from "@/services/library/mihonBackupImportService";
+import { useSyncProgress } from "@/contexts/SyncProgressContext";
 
 export function MihonSettingsPanel() {
   const { session } = useSession();
   const userId = session?.user.id ?? "";
   const { beginPageDataLoad, endPageDataLoad } = useDataFetchOverlay();
+  const { setMihonImportState, mihonImportProgress } = useSyncProgress();
   const [mihonIndexBusy, setMihonIndexBusy] = useState(false);
   const [mihonIndexInfo, setMihonIndexInfo] = useState<string | null>(null);
   const [mihonIndexError, setMihonIndexError] = useState<string | null>(null);
@@ -30,7 +31,6 @@ export function MihonSettingsPanel() {
   } | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
   const [mihonImportBusy, setMihonImportBusy] = useState(false);
-  const [mihonImportProgress, setMihonImportProgress] = useState<MihonImportProgress | null>(null);
   const [mihonImportResult, setMihonImportResult] = useState<MihonImportResult | null>(null);
   const [mihonImportError, setMihonImportError] = useState<string | null>(null);
 
@@ -95,7 +95,7 @@ export function MihonSettingsPanel() {
       setMihonImportBusy(true);
       setMihonImportError(null);
       setMihonImportResult(null);
-      setMihonImportProgress({
+      setMihonImportState(true, {
         total: 0,
         current: 0,
         created: 0,
@@ -104,10 +104,9 @@ export function MihonSettingsPanel() {
         errors: 0,
         item: "Initialisation...",
       });
-      beginPageDataLoad();
       try {
         const result = await importMihonBackupFile(file, (progress) => {
-          setMihonImportProgress(progress);
+          setMihonImportState(true, progress);
         });
         setMihonImportResult(result);
       } catch (error) {
@@ -117,10 +116,10 @@ export function MihonSettingsPanel() {
         );
       } finally {
         setMihonImportBusy(false);
-        endPageDataLoad();
+        setMihonImportState(false, null);
       }
     },
-    [beginPageDataLoad, endPageDataLoad]
+    [setMihonImportState]
   );
 
   return (
@@ -184,7 +183,7 @@ export function MihonSettingsPanel() {
             {mihonImportBusy ? "Import en cours…" : "Sélectionner et importer"}
           </button>
         </div>
-        {mihonImportProgress ? (
+        {mihonImportBusy && mihonImportProgress ? (
           <p className="settings-block-lead">
             {mihonImportProgress.current}/{mihonImportProgress.total} — créés:{" "}
             {mihonImportProgress.created}, mis à jour: {mihonImportProgress.updated}, erreurs:{" "}

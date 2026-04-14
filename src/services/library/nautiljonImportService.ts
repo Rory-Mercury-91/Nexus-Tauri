@@ -15,6 +15,8 @@ export type ReadingImportTarget = {
   anilistMediaId: number | null;
   /** Titre affiché (aligné sur la fiche détail / collection : VF, puis Jikan, puis colonne title). */
   title: string;
+  /** Toutes les variantes de titre pour la recherche (romaji, japonais, anglais, synonymes, colonne DB). */
+  searchAliases: string[];
 };
 
 /** Même priorité que ReadingDetailPage / grille collection pour le libellé. */
@@ -112,15 +114,172 @@ export async function fetchReadingImportTargets(supabase: SupabaseClient): Promi
   const mapped = (data ?? []).map((row) => {
     const aniRaw = (row as { anilist_media_id?: unknown }).anilist_media_id;
     const ani = aniRaw != null && Number.isFinite(Number(aniRaw)) && Number(aniRaw) > 0 ? Number(aniRaw) : null;
+    const r = row as Record<string, unknown>;
+    const jikan = (r.jikan_snapshot ?? {}) as Record<string, unknown>;
+    const full = (jikan.full ?? jikan.data ?? {}) as Record<string, unknown>;
+    const mal = (r.mal_official_snapshot ?? {}) as Record<string, unknown>;
+    const overrides = (mal.manual_overrides ?? {}) as Record<string, unknown>;
+
+    // Toutes les variantes pour la recherche : romaji (Jikan main), japonais, anglais, synonymes, titre DB brut
+    const aliases = [
+      String(full.title ?? ""),           // romaji Jikan
+      String(full.title_english ?? ""),   // anglais Jikan
+      String(full.title_japanese ?? ""),  // japonais
+      String(overrides.titre_original ?? ""), // titre original Nautiljon
+      String(r.title ?? ""),              // colonne DB (romaji MAL)
+      ...( Array.isArray(full.title_synonyms)
+        ? (full.title_synonyms as unknown[]).map((v) => String(v ?? ""))
+        : []
+      ),
+    ].map((v) => v.trim()).filter(Boolean);
+
     return {
-      id: String((row as { id: unknown }).id),
-      malMangaId: Number((row as { mal_manga_id?: unknown }).mal_manga_id ?? 0),
+      id: String(r.id),
+      malMangaId: Number((r.mal_manga_id as number | undefined) ?? 0),
       anilistMediaId: ani,
-      title: resolveReadingRowDisplayTitle(row as Record<string, unknown>),
+      title: resolveReadingRowDisplayTitle(r),
+      searchAliases: aliases,
     };
   });
   mapped.sort((a, b) => a.title.localeCompare(b.title, "fr", { sensitivity: "base" }));
   return mapped;
+}
+
+/** Plage d'IDs manuels Nexus (hors catalogue MAL réel). */
+const MANUAL_ID_MIN = 9_000_000;
+const MANUAL_ID_MAX = 9_999_999;
+
+/** Génère un MAL id manuel unique non utilisé dans library_reading. */
+async function generateManualReadingMalId(supabase: SupabaseClient): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = MANUAL_ID_MIN + Math.floor(Math.random() * (MANUAL_ID_MAX - MANUAL_ID_MIN + 1));
+    const { data } = await supabase
+      .from("library_reading")
+      .select("id")
+      .eq("mal_manga_id", candidate)
+      .maybeSingle();
+    if (!data) return candidate;
+  }
+  throw new Error("Impossible de générer un identifiant manuel disponible.");
+}
+
+/**
+ * Crée une nouvelle fiche lecture directement depuis un payload Nautiljon,
+ * sans avoir à lier à une entrée existante.
+ * Utile pour les œuvres absentes de MAL/AniList (exclusivités françaises, OEL, etc.).
+ */
+export async function createReadingEntryFromNautiljon(
+  supabase: SupabaseClient,
+  envelope: NautiljonImportEnvelope,
+  options?: { familyId?: string | null }
+): Promise<{ readingId: string; volumesUpserted: number }> {
+  const payload = envelope.payload;
+
+  const titleFr = toStringValue(payload.titre);
+  const titreOriginal = toStringValue(payload.titre_original);
+  const titreAlternatif = toStringValue(payload.titre_alternatif);
+  const nautiljonUrl = toStringValue(payload.nautiljon_url || payload._url);
+  const synopsisFr = toStringValue(payload.description);
+  const workStatus = toStringValue(payload.statut_publication || payload.statut);
+  const type = toStringValue(payload.type_contenu || payload.type_volume);
+  const genres = normalizeStringList(payload.genres);
+  const themes = normalizeStringList(payload._themes);
+  const demographic = toStringValue(payload.demographie);
+  const chapters = toNumberValue(payload.nb_chapitres);
+  const volumesCount = toNumberValue(payload.nb_volumes);
+  const coverUrl = toStringValue(payload.couverture_url);
+  const editeurVf = toStringValue(payload.editeur_vf);
+  const editeurVo = toStringValue(payload.editeur_vo);
+  const anneeVf = toStringValue(payload.annee_vf);
+  const anneeVo = toStringValue(payload.annee_vo);
+  const traducteur = toStringValue(payload._traducteur);
+  const scenarist = toStringValue(payload._scenarist);
+  const dessinateur = toStringValue(payload._dessinateur);
+  const ageConseille = toStringValue(payload._age_conseille);
+  const groupe = toStringValue(payload._groupe);
+  const prepublie = toStringValue(payload._prepublie);
+
+  const entryTitle = titleFr || titreOriginal || "Nouvelle lecture Nautiljon";
+
+  const initialFull: Record<string, unknown> = {
+    ...(type ? { type } : {}),
+    ...(workStatus ? { status: workStatus } : {}),
+    ...(chapters !== null ? { chapters } : {}),
+    ...(titreAlternatif ? { title_synonyms: [titreAlternatif] } : {}),
+    ...(coverUrl ? { images: { jpg: { image_url: coverUrl, large_image_url: coverUrl } } } : {}),
+    ...(genres.length ? { genres: genres.map((name) => ({ name })) } : {}),
+    ...(themes.length ? { themes: themes.map((name) => ({ name })) } : {}),
+    ...(demographic ? { demographics: [{ name: demographic }] } : {}),
+  };
+
+  const initialManualOverrides: Record<string, unknown> = {
+    ...(titleFr ? { title_fr: titleFr } : {}),
+    ...(synopsisFr ? { synopsis_fr: synopsisFr } : {}),
+    ...(titreOriginal ? { titre_original: titreOriginal } : {}),
+    ...(volumesCount !== null ? { volumes_vf: volumesCount } : {}),
+    ...(editeurVf ? { editeur_vf: editeurVf } : {}),
+    ...(editeurVo ? { editeur_vo: editeurVo } : {}),
+    ...(anneeVf ? { annee_vf: anneeVf } : {}),
+    ...(anneeVo ? { annee_vo: anneeVo } : {}),
+    ...(traducteur ? { traducteur } : {}),
+    ...(scenarist ? { scenarist } : {}),
+    ...(dessinateur ? { dessinateur } : {}),
+    ...(ageConseille ? { age_conseille: ageConseille } : {}),
+    ...(groupe ? { groupe } : {}),
+    ...(prepublie ? { prepublie } : {}),
+    links: { ...(nautiljonUrl ? { nautiljon: nautiljonUrl } : {}) },
+    locked_field_ids: ["title", "synopsis", "status", "genres", "themes", "demographic", "chapters"],
+  };
+
+  const malSnapshot = { manual_overrides: initialManualOverrides };
+  const jikanSnapshot = { full: initialFull };
+
+  const manualId = await generateManualReadingMalId(supabase);
+
+  const { data: newRow, error: insertError } = await supabase.rpc("upsert_library_reading_entry", {
+    p_mal_manga_id: manualId,
+    p_title: entryTitle,
+    p_title_english: titreOriginal || entryTitle,
+    p_main_picture_url: coverUrl || null,
+    p_jikan_snapshot: jikanSnapshot,
+    p_mal_official_snapshot: malSnapshot,
+    p_read_status: "reading",
+    p_user_notes: "",
+  });
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+  const readingId = String((newRow as { id?: string } | null)?.id ?? "");
+  if (!readingId) {
+    throw new Error("Création de la fiche lecture échouée : identifiant non retourné.");
+  }
+
+  // Volumes
+  const familyId = options?.familyId ?? null;
+  const payloadVolumes = normalizeVolumes(payload.volumes);
+  let volumesUpserted = 0;
+  for (const rawVolume of payloadVolumes) {
+    const volumeNumber = toNumberValue(rawVolume.numero);
+    if (!volumeNumber || volumeNumber <= 0) continue;
+    await upsertReadingVolume(supabase, {
+      readingId,
+      malMangaId: manualId,
+      familyId,
+      volumeNumber,
+      volumeType: toStringValue(payload.type_volume) || "standard",
+      imageUrl: toStringValue(rawVolume.couverture_url) || null,
+      releaseDateVf: normalizeDate(rawVolume.date_sortie),
+      purchaseDate: null,
+      priceEuros: toNumberValue(rawVolume.prix) ?? 0,
+      isOwned: false,
+      isRead: false,
+      isMihon: false,
+      owners: [],
+    });
+    volumesUpserted += 1;
+  }
+
+  return { readingId, volumesUpserted };
 }
 
 export async function applyNautiljonImportToReading(

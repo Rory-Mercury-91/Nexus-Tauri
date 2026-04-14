@@ -468,6 +468,25 @@
   white-space: nowrap;
 }
 
+/* Badge compact Mihon en vue grille : icône seule, info dans le tooltip natif */
+.anime-collection-mihon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: color-mix(in srgb, var(--primary) 85%, var(--text-secondary));
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+}
+
 .anime-collection-title-favorite {
   flex: 0 0 auto;
   color: #ff5d7d;

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus — Diagnostic Lectures ↔ Listes distantes</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #222536;
+      --border: #2e3148;
+      --text: #e8eaf6;
+      --text-muted: #7b82b0;
+      --accent: #7c6aff;
+      --accent2: #5b9fff;
+      --success: #4caf72;
+      --warn: #f0a732;
+      --error: #e05555;
+      --mal: #2e51a2;
+      --anilist: #4a90d9;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── LOGIN ── */
+    #login-screen {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+    }
+    .login-card h1 { font-size: 22px; margin-bottom: 6px; color: var(--text); }
+    .login-card p { color: var(--text-muted); margin-bottom: 28px; font-size: 13px; }
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    .field label { font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+    .field input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .btn-primary {
+      width: 100%;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+      margin-top: 8px;
+    }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary:hover:not(:disabled) { opacity: .85; }
+    #login-error { color: var(--error); font-size: 13px; margin-top: 12px; display: none; }
+
+    /* ── APP ── */
+    #app-screen { display: none; padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header h1 { font-size: 20px; }
+    .header-actions { display: flex; gap: 10px; align-items: center; }
+
+    .btn-sm {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--text);
+      padding: 7px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-sm:hover { background: var(--border); }
+    .btn-sm.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .status-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .summary-row {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.8;
+    }
+    .summary-row b { color: var(--text); }
+
+    /* Orphans */
+    .orphans-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .orphans-summary {
+      padding: 12px 16px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 13px;
+      color: var(--warn);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .orphans-summary:hover { background: var(--surface2); }
+    .orphans-list {
+      display: none;
+      padding: 0 16px 14px;
+    }
+    .orphans-list.open { display: block; }
+    .orphans-list ul { list-style: none; columns: 2; gap: 16px; }
+    .orphans-list li { font-size: 12px; color: var(--text-muted); padding: 2px 0; }
+    .orphans-list li code { color: var(--accent2); font-size: 11px; }
+
+    /* Filters */
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    /* Table */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: auto;
+    }
+    .row-count {
+      padding: 10px 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      padding: 10px 14px;
+      text-align: left;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+    .title-cell { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .id-cell { font-family: monospace; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-ok   { background: rgba(76,175,114,.18); color: var(--success); }
+    .badge-warn { background: rgba(240,167,50,.18);  color: var(--warn); }
+    .badge-err  { background: rgba(224,85,85,.18);   color: var(--error); }
+    .badge-mal  { background: rgba(46,81,162,.3);    color: #7da8ff; }
+    .badge-ani  { background: rgba(74,144,217,.2);   color: #76bcff; }
+    .badge-muted { background: var(--surface2); color: var(--text-muted); }
+
+    .empty { padding: 40px; text-align: center; color: var(--text-muted); }
+
+    /* CSV export */
+    .btn-export {
+      background: var(--success);
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      padding: 7px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-export:hover { opacity: .85; }
+
+    .logout-btn { color: var(--error); font-size: 12px; cursor: pointer; background: none; border: none; }
+
+    /* ── LIENS ── */
+    .link-title {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .link-title:hover { color: var(--accent2); border-bottom-color: var(--accent2); }
+
+    .link-btn {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: opacity .15s;
+    }
+    .link-btn:hover { opacity: .8; }
+    .link-mal  { background: rgba(46,81,162,.35);  color: #90aaff; }
+    .link-ani  { background: rgba(74,144,217,.25); color: #76bcff; }
+    .link-none { background: transparent; color: var(--text-muted); font-weight: 400; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════ LOGIN ══════════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <h1>🔍 Nexus Diagnostic</h1>
+    <p>Analyse Nexus ↔ MAL ↔ AniList — Lectures</p>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="email" placeholder="ton@email.com" autocomplete="email" />
+    </div>
+    <div class="field">
+      <label>Mot de passe</label>
+      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+    <button class="btn-primary" id="login-btn" onclick="doLogin()">Se connecter &amp; analyser</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- ══════════════════ APP ══════════════════ -->
+<div id="app-screen">
+  <div class="header">
+    <h1>📚 Analyse Nexus ↔ MAL ↔ AniList <span style="color:var(--text-muted);font-size:14px;font-weight:400">— Lectures</span></h1>
+    <div class="header-actions">
+      <button class="btn-export" onclick="exportCSV()">⬇ Export CSV</button>
+      <button class="btn-sm" onclick="runAnalysis()">🔄 Relancer</button>
+      <button class="logout-btn" onclick="doLogout()">Déconnexion</button>
+    </div>
+  </div>
+
+  <div class="status-bar" id="status-bar">
+    <div class="spinner" id="spinner"></div>
+    <span id="status-text">Chargement en cours…</span>
+  </div>
+
+  <div id="summary-row" class="summary-row" style="display:none"></div>
+
+  <div id="orphans-section" style="display:none">
+    <div class="orphans-block">
+      <div class="orphans-summary" onclick="toggleOrphans()">
+        ⚠️ <span id="orphans-title"></span>
+        <span id="orphans-chevron" style="margin-left:auto">▼</span>
+      </div>
+      <div class="orphans-list" id="orphans-list">
+        <ul id="orphans-ul"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="filters" id="filters-bar" style="display:none">
+    <!-- buttons injected by JS -->
+  </div>
+
+  <div class="table-wrap" id="table-wrap" style="display:none">
+    <div class="row-count" id="row-count"></div>
+    <div id="table-body"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+//  CONFIG  (clé anon = publique, pas de risque)
+// ══════════════════════════════════════════════
+const SUPABASE_URL     = 'https://obsvzcewfyrsvvofsmbm.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ic3Z6Y2V3Znlyc3Z2b2ZzbWJtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0MDAyOTIsImV4cCI6MjA5MDk3NjI5Mn0.osXxHxDzBoNvBS2Q27JRLlIMXuVhcG_FksFmThjNwIM';
+
+// ══════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════
+let accessToken = null;
+let allEntries  = [];
+let externalData = null;
+let currentFilter = 'all';
+
+// ══════════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════════
+async function doLogin() {
+  const email    = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errEl    = document.getElementById('login-error');
+  const btn      = document.getElementById('login-btn');
+  errEl.style.display = 'none';
+  if (!email || !password) { showLoginError('Remplis email et mot de passe.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Connexion…';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.access_token) {
+      throw new Error(data.error_description || data.msg || 'Identifiants incorrects.');
+    }
+    accessToken = data.access_token;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-screen').style.display = 'block';
+    await runAnalysis();
+  } catch (e) {
+    showLoginError(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Se connecter & analyser';
+  }
+}
+
+function doLogout() {
+  accessToken = null;
+  allEntries = [];
+  externalData = null;
+  document.getElementById('app-screen').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// Enter key on password field
+document.getElementById('password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('email').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('password').focus();
+});
+
+// ══════════════════════════════════════════════
+//  API HELPERS
+// ══════════════════════════════════════════════
+function authHeaders() {
+  return {
+    'Authorization': `Bearer ${accessToken}`,
+    'apikey': SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+  };
+}
+
+async function callEdgeFunction(name, body = {}) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`[${name}] ${res.status} — ${t.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+async function queryTable(table, select, extra = '') {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?select=${encodeURIComponent(select)}${extra}&order=title.asc`;
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`[${table}] ${res.status} — ${t.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// ══════════════════════════════════════════════
+//  DIAGNOSTIC LOGIC (miroir de readingListDiagnosticsService.ts)
+// ══════════════════════════════════════════════
+function buildEntries(rows, external) {
+  const malSet = new Set(external.mal_manga_ids);
+  const aniMap = external.anilist_by_mal_id;
+
+  // Passe 1 : détecter doublons MAL id
+  const malIdCount = new Map();
+  for (const row of rows) {
+    const id = Number(row.mal_manga_id ?? 0);
+    if (id > 0) malIdCount.set(id, (malIdCount.get(id) ?? 0) + 1);
+  }
+
+  return rows.map(row => {
+    const malId = Number(row.mal_manga_id ?? 0);
+    const anilistMediaIdRaw = Number(row.anilist_media_id ?? 0);
+    const anilistMediaId = Number.isFinite(anilistMediaIdRaw) && anilistMediaIdRaw > 0 ? anilistMediaIdRaw : null;
+
+    const snap = row.mal_official_snapshot ?? {};
+    const snapshotSource = typeof snap.source === 'string' ? snap.source : null;
+    const overrides = snap.manual_overrides ?? {};
+    const links = overrides.links ?? {};
+
+    const hasMihon = Boolean(overrides.mihon_source_id || String(links.mihon_source ?? '').trim());
+    const hasNautiljon = Boolean(
+      String(links.nautiljon ?? '').trim() ||
+      overrides.nautiljon_needs_manual_import
+    );
+
+    const inMal = Number.isFinite(malId) && malId > 0 && malSet.has(malId);
+    const ani   = Number.isFinite(malId) && malId > 0 ? aniMap[String(malId)] : undefined;
+    const inAni = Boolean(ani);
+
+    return {
+      rowId: String(row.id ?? ''),
+      title: String(row.title ?? '—'),
+      mal_manga_id: malId,
+      anilistMediaId: ani?.anilist_media_id ?? anilistMediaId,
+      inMalList: inMal,
+      inAnilistList: inAni,
+      anilistListStatus: ani?.list_status ?? null,
+      nexusOnlyInExternalLists: Number.isFinite(malId) && malId > 0 && !inMal && !inAni,
+      snapshotSource,
+      hasMihon,
+      hasNautiljon,
+      isDuplicateMalId: Number.isFinite(malId) && malId > 0 && (malIdCount.get(malId) ?? 0) > 1,
+    };
+  });
+}
+
+const FILTERS = [
+  { id: 'all',               label: 'Tout', fn: () => true },
+  { id: 'comparable_only',   label: 'Avec MAL id', fn: e => e.mal_manga_id > 0 },
+  { id: 'both_remotes',      label: 'MAL + AniList', fn: e => e.mal_manga_id > 0 && e.inMalList && e.inAnilistList },
+  { id: 'mal_only_remote',   label: 'MAL seulement', fn: e => e.mal_manga_id > 0 && e.inMalList && !e.inAnilistList },
+  { id: 'anilist_only_remote', label: 'AniList seulement', fn: e => e.mal_manga_id > 0 && e.inAnilistList && !e.inMalList },
+  { id: 'nexus_absent_both', label: 'Nexus seulement', fn: e => e.nexusOnlyInExternalLists },
+  { id: 'mal_anilist_desync',label: 'Désync MAL/AniList', fn: e => e.mal_manga_id > 0 && e.inMalList !== e.inAnilistList },
+  { id: 'nexus_no_mal_id',   label: 'Sans MAL id (AniList only)', fn: e => !(e.mal_manga_id > 0) },
+  { id: 'duplicate_malid',   label: 'Doublons MAL id', fn: e => e.isDuplicateMalId },
+  { id: 'has_mihon',         label: 'Mihon', fn: e => e.hasMihon },
+  { id: 'has_nautiljon',     label: 'Nautiljon', fn: e => e.hasNautiljon },
+  { id: 'no_source',         label: 'Aucune source externe', fn: e => !e.inMalList && !e.inAnilistList && !e.hasMihon && !e.hasNautiljon },
+];
+
+// ══════════════════════════════════════════════
+//  MAIN : FETCH + RENDER
+// ══════════════════════════════════════════════
+async function runAnalysis() {
+  setStatus('Interrogation des listes MAL + AniList…', true);
+  hideResults();
+
+  try {
+    // 1. Edge function : récupère les listes distantes (tokens OAuth stockés en BDD)
+    const external = await callEdgeFunction('reading-list-diagnostics');
+    externalData = external;
+
+    setStatus('Chargement de la bibliothèque Nexus…', true);
+
+    // 2. Table library_reading
+    const rows = await queryTable(
+      'library_reading',
+      'id,title,mal_manga_id,anilist_media_id,mal_official_snapshot'
+    );
+
+    // 3. Croisement
+    allEntries = buildEntries(rows, external);
+
+    renderSummary(rows.length, external);
+    renderFilters();
+    applyFilter(currentFilter);
+    setStatus(`Analyse terminée — ${rows.length} fiches Nexus — ${new Date().toLocaleTimeString('fr-FR')}`, false);
+  } catch (e) {
+    setStatus(`❌ Erreur : ${e.message}`, false);
+    console.error(e);
+  }
+}
+
+// ══════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════
+function setStatus(msg, loading) {
+  document.getElementById('status-text').textContent = msg;
+  document.getElementById('spinner').style.display = loading ? 'block' : 'none';
+}
+
+function hideResults() {
+  document.getElementById('summary-row').style.display = 'none';
+  document.getElementById('orphans-section').style.display = 'none';
+  document.getElementById('filters-bar').style.display = 'none';
+  document.getElementById('table-wrap').style.display = 'none';
+}
+
+function renderSummary(nexusCount, external) {
+  const malCount = external.mal_manga_ids?.length ?? 0;
+  const aniLinked = Object.keys(external.anilist_by_mal_id ?? {}).length;
+  const orphans = external.anilist_entries_without_mal ?? [];
+
+  document.getElementById('summary-row').style.display = 'block';
+  document.getElementById('summary-row').innerHTML =
+    `<b>${nexusCount}</b> fiches Nexus &nbsp;·&nbsp; ` +
+    `MAL : <b>${malCount}</b> entrée(s) &nbsp;·&nbsp; ` +
+    `AniList liées MAL : <b>${aniLinked}</b> &nbsp;·&nbsp; ` +
+    `AniList sans idMal : <b style="color:var(--warn)">${orphans.length}</b>` +
+    (external.errors?.mal ? `<br><span style="color:var(--error)">⚠ MAL : ${external.errors.mal}</span>` : '') +
+    (external.errors?.anilist ? `<br><span style="color:var(--error)">⚠ AniList : ${external.errors.anilist}</span>` : '');
+
+  // Orphelins AniList
+  if (orphans.length > 0) {
+    document.getElementById('orphans-section').style.display = 'block';
+    document.getElementById('orphans-title').textContent =
+      `Entrées AniList sans lien MAL (${orphans.length}) — ces entrées doivent être importées par la phase AniList de la sync`;
+    const ul = document.getElementById('orphans-ul');
+    ul.innerHTML = orphans.map(o =>
+      `<li><a class="link-btn link-ani" href="https://anilist.co/manga/${o.anilist_media_id}" target="_blank">AniList #${o.anilist_media_id} ↗</a> ${escHtml(o.title)}</li>`
+    ).join('');
+  }
+}
+
+function renderFilters() {
+  const bar = document.getElementById('filters-bar');
+  bar.style.display = 'flex';
+  bar.innerHTML = FILTERS.map(f => {
+    const count = allEntries.filter(f.fn).length;
+    return `<button class="btn-sm ${currentFilter === f.id ? 'active' : ''}" onclick="applyFilter('${f.id}')">
+      ${f.label} <span style="opacity:.6;font-size:11px">${count}</span>
+    </button>`;
+  }).join('');
+}
+
+function applyFilter(filterId) {
+  currentFilter = filterId;
+  const filterDef = FILTERS.find(f => f.id === filterId) ?? FILTERS[0];
+  const filtered = allEntries.filter(filterDef.fn);
+  renderTable(filtered);
+  renderFilters(); // refresh active state
+}
+
+function renderTable(entries) {
+  const wrap = document.getElementById('table-wrap');
+  wrap.style.display = 'block';
+  document.getElementById('row-count').textContent = `${entries.length} ligne(s)`;
+
+  if (entries.length === 0) {
+    document.getElementById('table-body').innerHTML =
+      '<div class="empty">Aucune entrée pour ce filtre.</div>';
+    return;
+  }
+
+  const rows = entries.map(e => {
+    const malBadge = e.inMalList
+      ? `<span class="badge badge-mal">MAL ✓</span>`
+      : `<span class="badge badge-muted">MAL —</span>`;
+    const aniBadge = e.inAnilistList
+      ? `<span class="badge badge-ani">AniList ✓</span>`
+      : `<span class="badge badge-muted">AniList —</span>`;
+
+    const titleContent = e.mal_manga_id > 0
+      ? `<a class="link-title" href="https://myanimelist.net/manga/${e.mal_manga_id}" target="_blank" title="Ouvrir sur MAL">${escHtml(e.title)}</a>`
+      : `<span>${escHtml(e.title)}</span>`;
+
+    const malLink = e.mal_manga_id > 0
+      ? `<a class="link-btn link-mal" href="https://myanimelist.net/manga/${e.mal_manga_id}" target="_blank">MAL #${e.mal_manga_id} ↗</a>`
+      : '<span class="link-btn link-none">—</span>';
+    const aniLink = e.anilistMediaId
+      ? `<a class="link-btn link-ani" href="https://anilist.co/manga/${e.anilistMediaId}" target="_blank">AniList #${e.anilistMediaId} ↗</a>`
+      : '<span class="link-btn link-none">—</span>';
+
+    const flags = [
+      e.isDuplicateMalId ? '<span class="badge badge-err">⚠ Doublon</span>' : '',
+      e.nexusOnlyInExternalLists ? '<span class="badge badge-err">Nexus seul</span>' : '',
+    ].filter(Boolean).join(' ');
+
+    const mihonCell = e.hasMihon
+      ? `<span class="badge badge-ok">✓</span>`
+      : `<span style="color:var(--border)">—</span>`;
+    const nautiljonCell = e.hasNautiljon
+      ? `<span class="badge badge-warn">✓</span>`
+      : `<span style="color:var(--border)">—</span>`;
+
+    return `<tr>
+      <td class="title-cell" title="${escHtml(e.title)}">${titleContent}</td>
+      <td class="id-cell">${malLink}</td>
+      <td class="id-cell">${aniLink}</td>
+      <td>${malBadge} ${aniBadge}</td>
+      <td style="text-align:center">${mihonCell}</td>
+      <td style="text-align:center">${nautiljonCell}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${flags || '—'}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${e.snapshotSource ?? '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('table-body').innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Titre</th>
+          <th>MAL</th>
+          <th>AniList</th>
+          <th>Présence listes</th>
+          <th style="text-align:center">Mihon</th>
+          <th style="text-align:center">Nautiljon</th>
+          <th>Flags</th>
+          <th>Source sync</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ══════════════════════════════════════════════
+//  ORPHANS TOGGLE
+// ══════════════════════════════════════════════
+function toggleOrphans() {
+  const list = document.getElementById('orphans-list');
+  const chevron = document.getElementById('orphans-chevron');
+  const open = list.classList.toggle('open');
+  chevron.textContent = open ? '▲' : '▼';
+}
+
+// ══════════════════════════════════════════════
+//  CSV EXPORT
+// ══════════════════════════════════════════════
+function exportCSV() {
+  if (!allEntries.length) return;
+  const filterDef = FILTERS.find(f => f.id === currentFilter) ?? FILTERS[0];
+  const data = allEntries.filter(filterDef.fn);
+
+  const headers = ['Titre','MAL id','AniList id','In MAL','In AniList','AniList status','Source sync','Mihon','Nautiljon','Doublon','Absent'];
+  const csvRows = [headers.join(';')];
+  for (const e of data) {
+    csvRows.push([
+      `"${(e.title ?? '').replace(/"/g,'""')}"`,
+      e.mal_manga_id > 0 ? e.mal_manga_id : '',
+      e.anilistMediaId ?? '',
+      e.inMalList ? 'oui' : 'non',
+      e.inAnilistList ? 'oui' : 'non',
+      e.anilistListStatus ?? '',
+      e.snapshotSource ?? '',
+      e.hasMihon ? 'oui' : '',
+      e.hasNautiljon ? 'oui' : '',
+      e.isDuplicateMalId ? 'oui' : '',
+      e.nexusOnlyInExternalLists ? 'oui' : '',
+    ].join(';'));
+  }
+  // Also add orphans sheet
+  if (externalData?.anilist_entries_without_mal?.length) {
+    csvRows.push('');
+    csvRows.push('=== ORPHELINS ANILIST (sans idMal) ===');
+    csvRows.push('AniList id;Titre');
+    for (const o of externalData.anilist_entries_without_mal) {
+      csvRows.push(`${o.anilist_media_id};"${(o.title ?? '').replace(/"/g,'""')}"`);
+    }
+  }
+
+  const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `nexus-diagnostic-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ══════════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════════
+function escHtml(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

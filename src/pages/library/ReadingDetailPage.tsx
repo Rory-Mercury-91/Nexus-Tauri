@@ -369,16 +369,17 @@ export function ReadingDetailPage() {
     const manualLinkAnilist = String(manualLinks.anilist ?? "").trim();
     const titleJapanese = String(jikanRaw.title_japanese ?? "").trim();
     const titleEnglish = String(jikanRaw.title_english ?? "").trim();
-    
-    // Priorisation : Titre VF > Titre Romanisé > Titre Original (japonais)
+    // Titre romaji : titre principal Jikan (souvent le romaji MAL) ou colonne DB comme fallback
+    const titleRomaji = String(jikanRaw.title ?? (db.title as string | undefined) ?? "").trim();
+
+    // Priorisation : Titre VF > Titre Anglais > Titre Original (japonais)
     const title = String(
       (manualTitleFr || undefined) ??
       (titleEnglish || undefined) ??
       (manualTitreOriginal || undefined) ??
       (titleJapanese || undefined) ??
-      jikanRaw.title ??
-        (db.title as string | undefined) ??
-        "—"
+      (titleRomaji || undefined) ??
+      "—"
     );
     const titleSynonyms = Array.isArray(jikanRaw.title_synonyms)
       ? (jikanRaw.title_synonyms as unknown[]).map((v) => String(v ?? "")).filter(Boolean)
@@ -446,6 +447,7 @@ export function ReadingDetailPage() {
     return {
       title,
       titleFr: manualTitleFr,
+      titleRomaji,
       titleRomanized: titleEnglish,
       titleOriginal: manualTitreOriginal || titleJapanese,
       titleJapanese,
@@ -552,8 +554,10 @@ export function ReadingDetailPage() {
 
     const source = [
       ...readingView.titleSynonyms,
+      readingView.titleRomaji,
       readingView.titleEnglish,
       readingView.titleJapanese,
+      readingView.titleOriginal, // titre_original Nautiljon (peut différer du japonais Jikan)
     ].map((value) => value.trim()).filter(Boolean);
     const normalizedMain = normalizeAltTitle(readingView.title.trim());
     const seen = new Set<string>();
@@ -567,7 +571,7 @@ export function ReadingDetailPage() {
       output.push(value);
     }
     return output;
-  }, [readingView.title, readingView.titleEnglish, readingView.titleJapanese, readingView.titleSynonyms]);
+  }, [readingView.title, readingView.titleRomaji, readingView.titleEnglish, readingView.titleJapanese, readingView.titleOriginal, readingView.titleSynonyms]);
   const dedupedBadges = useMemo(() => {
     function normalizeBadge(value: string): string {
       return value

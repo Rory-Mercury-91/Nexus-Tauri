@@ -18,19 +18,19 @@ import {
   startAnimeSync,
   startReadingSync,
   tickSyncWorker,
+  cancelActiveSyncRun,
   type SyncRun,
   type SyncProgressRow,
   type SyncSource,
   type SyncMediaType,
 } from "@/services/library/syncService";
 import { useSyncProgressRealtime, type RealtimeProgressRow } from "@/hooks/useSyncProgressRealtime";
+import type { MihonImportProgress } from "@/services/library/mihonBackupImportService";
 
 /** Polling lorsqu'une sync est en cours : 1,5 s pour un retour quasi-temps réel. */
 const SYNC_POLL_ACTIVE_MS = 1_500;
+/** Polling idle : recharge toutes les 15 s pour détecter les jobs créés côté serveur. */
 const SYNC_POLL_IDLE_MS = 15_000;
-/** 3 heures depuis la dernière complétion (pas depuis le démarrage). */
-const AUTO_SYNC_INTERVAL_MS = 3 * 60 * 60 * 1000;
-const AUTO_SYNC_CHECK_MS = 5 * 60 * 1000;
 
 export type SyncProgressContextType = {
   animeActiveRun: SyncRun | null;
@@ -55,6 +55,10 @@ export type SyncProgressContextType = {
    * Efface l'état local immédiatement (réponse UI instantanée) avant même le retour HTTP.
    */
   cancelRun: (mediaType: SyncMediaType) => Promise<void>;
+  /** Import Mihon en cours (client-side uniquement, pas de sync_runs en DB). */
+  mihonImportActive: boolean;
+  mihonImportProgress: MihonImportProgress | null;
+  setMihonImportState: (active: boolean, progress: MihonImportProgress | null) => void;
   /** Shims de compatibilité pour les anciens consommateurs anime. */
   activeRun: SyncRun | null;
   recentRuns: SyncRun[];
@@ -72,6 +76,16 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
   const [readingRecentRuns, setReadingRecentRuns] = useState<SyncRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mihonImportActive, setMihonImportActive] = useState(false);
+  const [mihonImportProgress, setMihonImportProgress] = useState<MihonImportProgress | null>(null);
+
+  const setMihonImportState = useCallback(
+    (active: boolean, progress: MihonImportProgress | null) => {
+      setMihonImportActive(active);
+      setMihonImportProgress(progress);
+    },
+    []
+  );
 
   const inFlightRef = useRef(false);
   const pendingLoadRef = useRef(false);
@@ -80,19 +94,13 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
   /** Indique le media type qui attend le démarrage de la phase AniList après MAL. */
   const [pendingAnilistFor, setPendingAnilistFor] = useState<SyncMediaType | null>(null);
   const pendingAnilistRef = useRef<SyncMediaType | null>(null);
+  /** run_id du run MAL qu'on attend avant de lancer AniList (évite la race condition). */
+  const pendingMalRunIdRef = useRef<string | null>(null);
 
-  /** Refs stables pour les closures de l'auto-sync (évite de recréer l'interval). */
-  const animeRecentRunsRef = useRef(animeRecentRuns);
-  const readingRecentRunsRef = useRef(readingRecentRuns);
+  /** Refs stables pour l'accès aux run actifs dans les closures sans re-render. */
   const animeActiveRunRef = useRef(animeActiveRun);
   const readingActiveRunRef = useRef(readingActiveRun);
 
-  useEffect(() => {
-    animeRecentRunsRef.current = animeRecentRuns;
-  }, [animeRecentRuns]);
-  useEffect(() => {
-    readingRecentRunsRef.current = readingRecentRuns;
-  }, [readingRecentRuns]);
   useEffect(() => {
     animeActiveRunRef.current = animeActiveRun;
   }, [animeActiveRun]);
@@ -229,18 +237,39 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
    * Effet de chaînage : dès que la phase MAL est terminée et qu'une phase AniList
    * est en attente, on lance la sync AniList complement.
    * Le worker skip automatiquement les entrées AniList ayant un idMal (priorité MAL).
+   *
+   * On traque le run_id du run MAL lancé (pendingMalRunIdRef) pour ne pas confondre
+   * avec d'anciens runs terminés — ce qui causait une race condition où AniList
+   * démarrait avant que MAL ait fini.
    */
   useEffect(() => {
     const pending = pendingAnilistFor;
     if (!pending) return;
 
+    const targetRunId = pendingMalRunIdRef.current;
     const run = pending === "anime" ? animeActiveRun : readingActiveRun;
-    const malDone =
-      !run || (run.status !== "queued" && run.status !== "running");
+    const recentRuns = pending === "anime" ? animeRecentRuns : readingRecentRuns;
+
+    let malDone: boolean;
+    if (targetRunId) {
+      if (run?.id === targetRunId) {
+        // Le run MAL est encore actif — attendre
+        malDone = run.status !== "queued" && run.status !== "running";
+      } else {
+        // Chercher dans l'historique récent : il y apparaît une fois terminé
+        const targetRun = recentRuns.find((r) => r.id === targetRunId);
+        malDone = targetRun
+          ? targetRun.status !== "queued" && targetRun.status !== "running"
+          : false; // Pas encore visible dans l'historique — attendre
+      }
+    } else {
+      malDone = !run || (run.status !== "queued" && run.status !== "running");
+    }
     if (!malDone) return;
 
     setPendingAnilistFor(null);
     pendingAnilistRef.current = null;
+    pendingMalRunIdRef.current = null;
 
     void (async () => {
       const anilistConnected = await ensureProviderConnected("anilist");
@@ -264,7 +293,7 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
         appendClientLog("error", `sync.${pending}.anilist-complement`, message);
       }
     })();
-  }, [animeActiveRun, readingActiveRun, pendingAnilistFor, ensureProviderConnected, load]);
+  }, [animeActiveRun, animeRecentRuns, readingActiveRun, readingRecentRuns, pendingAnilistFor, ensureProviderConnected, load]);
 
   /**
    * Synchronisation complète : MAL d'abord (données prioritaires),
@@ -284,11 +313,10 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
         const supabase = getSupabaseClient();
 
         if (malConnected) {
-          if (mediaType === "anime") {
-            await startAnimeSync(supabase, "mal");
-          } else {
-            await startReadingSync(supabase, "mal");
-          }
+          const malResult = mediaType === "anime"
+            ? await startAnimeSync(supabase, "mal")
+            : await startReadingSync(supabase, "mal");
+          pendingMalRunIdRef.current = malResult.run_id;
           pendingAnilistRef.current = mediaType;
           setPendingAnilistFor(mediaType);
           await load();
@@ -318,11 +346,6 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
     },
     [ensureProviderConnected, load]
   );
-
-  const startFullSyncRef = useRef(startFullSync);
-  useEffect(() => {
-    startFullSyncRef.current = startFullSync;
-  }, [startFullSync]);
 
   /** Sync sur une source unique (pages détail ou usage ponctuel). */
   const startSingleSync = useCallback(
@@ -357,61 +380,6 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
   );
 
   /**
-   * Auto-sync toutes les 3 heures.
-   * Le compteur part de la DERNIÈRE COMPLÉTION (finished_at en base),
-   * pas du dernier démarrage — évite les chevauchements.
-   * Vérifié toutes les 5 min ; ne tourne pas si une sync est déjà active.
-   */
-  useEffect(() => {
-    let autoSyncRunning = false;
-
-    const tick = async () => {
-      if (autoSyncRunning) return;
-      if (pendingAnilistRef.current) return;
-      const animeRunning =
-        animeActiveRunRef.current?.status === "queued" ||
-        animeActiveRunRef.current?.status === "running";
-      const readingRunning =
-        readingActiveRunRef.current?.status === "queued" ||
-        readingActiveRunRef.current?.status === "running";
-      if (animeRunning || readingRunning) return;
-
-      const now = Date.now();
-      const animeCompleted = animeRecentRunsRef.current.find((r) => r.status === "completed");
-      const animeLastMs = animeCompleted?.finished_at
-        ? new Date(animeCompleted.finished_at).getTime()
-        : 0;
-      const readingCompleted = readingRecentRunsRef.current.find((r) => r.status === "completed");
-      const readingLastMs = readingCompleted?.finished_at
-        ? new Date(readingCompleted.finished_at).getTime()
-        : 0;
-
-      if (now - animeLastMs >= AUTO_SYNC_INTERVAL_MS) {
-        autoSyncRunning = true;
-        try {
-          await startFullSyncRef.current("anime");
-        } catch {
-          /* Ignore silencieusement (intégration non configurée, etc.) */
-        } finally {
-          autoSyncRunning = false;
-        }
-      } else if (now - readingLastMs >= AUTO_SYNC_INTERVAL_MS) {
-        autoSyncRunning = true;
-        try {
-          await startFullSyncRef.current("reading");
-        } catch {
-          /* Ignore silencieusement */
-        } finally {
-          autoSyncRunning = false;
-        }
-      }
-    };
-
-    const id = window.setInterval(() => void tick(), AUTO_SYNC_CHECK_MS);
-    return () => window.clearInterval(id);
-  }, []); // Stable — utilise des refs
-
-  /**
    * Annule le run actif : efface l'état local IMMÉDIATEMENT (réponse UI instantanée),
    * puis appelle l'API d'annulation en arrière-plan et rechargele statut.
    */
@@ -427,7 +395,6 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
       }
       try {
         const supabase = getSupabaseClient();
-        const { cancelActiveSyncRun } = await import("@/services/library/syncService");
         await cancelActiveSyncRun(supabase, mediaType);
       } catch {
         // En cas d'échec de l'API, le reload rétablira l'état réel
@@ -451,6 +418,9 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
       startSingleSync,
       refresh,
       cancelRun,
+      mihonImportActive,
+      mihonImportProgress,
+      setMihonImportState,
       /* Shims de rétrocompatibilité pour les anciens consommateurs anime */
       activeRun: animeActiveRun,
       recentRuns: animeRecentRuns,
@@ -469,6 +439,9 @@ export function SyncProgressProvider({ children }: { children: ReactNode }) {
       startSingleSync,
       refresh,
       cancelRun,
+      mihonImportActive,
+      mihonImportProgress,
+      setMihonImportState,
     ]
   );
 

@@ -33,6 +33,7 @@ import { IntegrationsSettingsPanel } from "./IntegrationsSettingsPanel";
 import { ReadingListsComparePanel } from "./ReadingListsComparePanel";
 import { MihonSettingsPanel } from "./MihonSettingsPanel";
 import { SecurityLogsPanel } from "./SecurityLogsPanel";
+import { DangerZonePanel } from "./DangerZonePanel";
 import { DebugJsonDiffPanel } from "./DebugJsonDiffPanel";
 import { SyncReportPanel } from "./SyncReportPanel";
 import "./SettingsPage.css";
@@ -684,6 +685,8 @@ export function SettingsPage() {
               </div>
             </form>
           </section>
+
+          <DangerZonePanel />
         </div>
       )}
     </div>

@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useSyncProgress } from "@/contexts/SyncProgressContext";
-import { formatReadingSyncImportReportLines } from "@/services/library/readingSyncImportReport";
 import type { SyncRun } from "@/services/library/syncService";
 
 const DISMISSED_KEY = "sync:report:dismissed-runs";

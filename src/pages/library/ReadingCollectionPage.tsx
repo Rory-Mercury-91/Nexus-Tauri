@@ -46,6 +46,8 @@ type ProgressSourceMode = "auto" | "mal" | "mihon";
 
 const SCROLL_KEY_GRID = "reading-collection:scroll-main:grid";
 const SCROLL_KEY_LIST = "reading-collection:scroll-main:list";
+/** IDs MAL générés automatiquement lors d'un import Mihon (plage 1.9B–2.1B). En dessous = vrai ID MAL. */
+const MIHON_MANUAL_ID_MIN = 1_900_000_000;
 const RETURN_TO_COLLECTION_KEY = "app:scroll:return-to-collection";
 const VIEW_MODE_KEY = "reading-collection:view-mode";
 const NO_IMAGE_DATA_URI =
@@ -138,10 +140,15 @@ export function ReadingCollectionPage() {
 
   const [nautiljonRefreshing, setNautiljonRefreshing] = useState(false);
   const [showNautiljonPendingOnly, setShowNautiljonPendingOnly] = useState(false);
-  const [showMihonOnly, setShowMihonOnly] = useState(false);
   const [mihonSourceFilter, setMihonSourceFilter] = useState<string>("Tous");
   const [showDuplicateMalGroups, setShowDuplicateMalGroups] = useState(false);
   const [progressSourceMode, setProgressSourceMode] = useState<ProgressSourceMode>("auto");
+  /** Filtres de présence par source de données (mode AND : toutes les sources cochées doivent être présentes). */
+  const [filterHasMal, setFilterHasMal] = useState(false);
+  const [filterHasAnilist, setFilterHasAnilist] = useState(false);
+  const [filterHasMihon, setFilterHasMihon] = useState(false);
+  const [filterHasNautiljon, setFilterHasNautiljon] = useState(false);
+  const [filterNexusOnly, setFilterNexusOnly] = useState(false);
 
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -386,14 +393,27 @@ export function ReadingCollectionPage() {
       if (showNautiljonPendingOnly && !item.nautiljonNeedsManualImport) {
         return false;
       }
-      if (showMihonOnly && !item.hasMihonInFamily) {
-        return false;
-      }
       if (
         mihonSourceFilter !== "Tous" &&
         !(item.mihonSources ?? []).includes(mihonSourceFilter)
       ) {
         return false;
+      }
+      // Filtres de présence par source — logique OR :
+      // chaque toggle activé représente une source à inclure, l'entrée doit matcher AU MOINS un toggle activé.
+      if (filterHasMal || filterHasAnilist || filterHasMihon || filterHasNautiljon || filterNexusOnly) {
+        const hasMal = item.malId > 0 && item.malId < MIHON_MANUAL_ID_MIN;
+        const hasAnilist = item.anilistMediaId !== null;
+        const hasMihon = item.hasMihonInFamily;
+        const hasNautiljon = item.hasNautiljonData;
+        const isNexusOnly = !hasMal && !hasAnilist && !hasMihon && !hasNautiljon;
+        const matches =
+          (filterHasMal && hasMal) ||
+          (filterHasAnilist && hasAnilist) ||
+          (filterHasMihon && hasMihon) ||
+          (filterHasNautiljon && hasNautiljon) ||
+          (filterNexusOnly && isNexusOnly);
+        if (!matches) return false;
       }
       if (genreFilter !== "Tous" && !item.genres.includes(genreFilter)) {
         return false;
@@ -426,7 +446,7 @@ export function ReadingCollectionPage() {
       }
     });
     return base;
-  }, [favoriteOnly, genreFilter, items, mihonSourceFilter, query, showFamilyCollection, showMihonOnly, showNautiljonPendingOnly, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
+  }, [favoriteOnly, filterHasAnilist, filterHasMal, filterHasMihon, filterHasNautiljon, filterNexusOnly, genreFilter, items, mihonSourceFilter, query, showFamilyCollection, showNautiljonPendingOnly, sortMode, tabType, themeFilter, userStatusFilter, workStatusFilter]);
 
   useEffect(() => {
     if (!availableMihonSources.includes(mihonSourceFilter)) {
@@ -536,10 +556,14 @@ export function ReadingCollectionPage() {
     setFavoriteOnly(false);
     setShowFamilyCollection(false);
     setShowNautiljonPendingOnly(false);
-    setShowMihonOnly(false);
     setMihonSourceFilter("Tous");
     setShowDuplicateMalGroups(false);
     setProgressSourceMode("auto");
+    setFilterHasMal(false);
+    setFilterHasAnilist(false);
+    setFilterHasMihon(false);
+    setFilterHasNautiljon(false);
+    setFilterNexusOnly(false);
     setPage(1);
   }
 
@@ -756,14 +780,42 @@ export function ReadingCollectionPage() {
               label="Nautiljon à réimporter"
             />
             <ToggleSwitch
-              checked={showMihonOnly}
-              onChange={setShowMihonOnly}
-              label="Présent sur Mihon"
-            />
-            <ToggleSwitch
               checked={showDuplicateMalGroups}
               onChange={setShowDuplicateMalGroups}
               label="Regrouper doublons MAL ID"
+            />
+          </div>
+
+          <div className="anime-collection-filter-field anime-collection-filter-field-toggle">
+            <span
+              title="Logique OR : activer plusieurs sources affiche les entrées présentes sur l'une OU l'autre des sources sélectionnées."
+            >
+              Présence sources
+            </span>
+            <ToggleSwitch
+              checked={filterHasMal}
+              onChange={(v) => { setFilterHasMal(v); setPage(1); }}
+              label="MAL"
+            />
+            <ToggleSwitch
+              checked={filterHasAnilist}
+              onChange={(v) => { setFilterHasAnilist(v); setPage(1); }}
+              label="AniList"
+            />
+            <ToggleSwitch
+              checked={filterHasMihon}
+              onChange={(v) => { setFilterHasMihon(v); setPage(1); }}
+              label="Mihon"
+            />
+            <ToggleSwitch
+              checked={filterHasNautiljon}
+              onChange={(v) => { setFilterHasNautiljon(v); setPage(1); }}
+              label="Nautiljon"
+            />
+            <ToggleSwitch
+              checked={filterNexusOnly}
+              onChange={(v) => { setFilterNexusOnly(v); setPage(1); }}
+              label="Nexus seul"
             />
           </div>
         </div>
@@ -883,7 +935,7 @@ export function ReadingCollectionPage() {
           const volumeProgress = percent(item.volumesRead, item.volumesTotal);
           return (
             <article
-              key={item.malId}
+              key={item.id}
               className="anime-collection-card"
               role="link"
               tabIndex={0}
@@ -1040,18 +1092,20 @@ export function ReadingCollectionPage() {
                         {item.title}
                       </Link>
                       {mihonUserBadges.length > 0 ? (
-                        <div className="anime-collection-owners-inline" title={`Mihon: ${mihonUsers.join(", ")}`}>
-                          {mihonUserBadges.map((badge, idx) => (
-                            <span key={`${badge.name}-${idx}`} className="anime-collection-owner-chip">
-                              <ProfileAvatarImage
-                                size={18}
-                                storagePath={badge.avatarPath}
-                                displayName={badge.name}
-                              />
-                              <span>{badge.name}</span>
-                            </span>
-                          ))}
-                        </div>
+                        <span
+                          className="anime-collection-mihon-badge"
+                          title={[
+                            `Mihon : ${mihonUsers.join(", ")}`,
+                            (item.mihonSources ?? []).length > 0
+                              ? `Source : ${(item.mihonSources ?? []).join(", ")}`
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join("\n")}
+                          aria-label={`Présence Mihon : ${mihonUsers.join(", ")}`}
+                        >
+                          M
+                        </span>
                       ) : null}
                     </div>
                   </>

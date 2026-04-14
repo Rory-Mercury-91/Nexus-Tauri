@@ -710,6 +710,11 @@
   vertical-align: middle;
   color: var(--color-accent, #6b8cff);
   opacity: 0.9;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
 }
 
 .reading-lists-compare-catalog-link:hover {
@@ -786,27 +791,20 @@
 
 .reading-lists-diagnostics-table {
   table-layout: fixed;
-  min-width: 52rem;
+  min-width: 60rem;
 }
 
 .reading-lists-diagnostics-table col.reading-lists-col-title {
-  width: 34%;
+  width: 28%;
 }
 
 .reading-lists-diagnostics-table col.reading-lists-col-malid {
-  width: 4.75rem;
+  width: 5.5rem;
 }
 
-.reading-lists-diagnostics-table col.reading-lists-col-mal {
-  width: 4.25rem;
-}
-
-.reading-lists-diagnostics-table col.reading-lists-col-anilist {
-  width: 8.5rem;
-}
-
-.reading-lists-diagnostics-table col.reading-lists-col-nexus {
-  width: 4.5rem;
+/* Colonnes MAL, AniList, Mihon, Nautiljon */
+.reading-lists-diagnostics-table col.reading-lists-col-badge {
+  width: 5rem;
 }
 
 .reading-lists-diagnostics-table col.reading-lists-col-sync {
@@ -815,6 +813,33 @@
 
 .reading-lists-diagnostics-table col.reading-lists-col-actions {
   width: 10.5rem;
+}
+
+/* Ligne doublon */
+.reading-lists-diagnostics-table tbody tr.reading-lists-diagnostics-row-warn td {
+  background: color-mix(in srgb, var(--warning, #fbbf24) 8%, transparent);
+}
+
+.reading-lists-diagnostics-dup-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+/* Stat en warning */
+.reading-lists-compare-stat-warn {
+  color: #fbbf24;
+  font-weight: 500;
+}
+
+/* Ligne vide */
+.reading-lists-diagnostics-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 1rem;
+  font-size: 13px;
 }
 
 .reading-lists-diagnostics-table .reading-lists-diagnostics-th-num {
@@ -951,6 +976,22 @@
   padding: 0.2rem 0.4rem;
 }
 
+.integrations-diagnostics-nexus-delete-btn {
+  color: var(--color-error, #e05555);
+  border-color: transparent;
+  opacity: 0.55;
+}
+.integrations-diagnostics-nexus-delete-btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-error, #e05555) 12%, transparent);
+  border-color: var(--color-error, #e05555);
+  opacity: 1;
+}
+.integrations-diagnostics-nexus-delete-btn.is-nexus-only {
+  opacity: 1;
+  color: var(--color-error, #e05555);
+  border-color: color-mix(in srgb, var(--color-error, #e05555) 40%, transparent);
+}
+
 /* ─── SyncReportPanel ─── */
 .sync-report-header {
   display: flex;
@@ -1074,4 +1115,207 @@
   font-size: 11px;
   color: var(--text-secondary);
   font-style: italic;
+}
+
+/* ─── Zone dangereuse ─── */
+
+.danger-zone-block {
+  border-color: color-mix(in srgb, #ef4444 35%, var(--border));
+}
+
+.danger-zone-title {
+  color: #ef4444;
+}
+
+.danger-zone-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.danger-zone-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, var(--background) 10%);
+}
+
+.danger-zone-row.is-critical {
+  border-color: color-mix(in srgb, #ef4444 45%, var(--border));
+  background: color-mix(in srgb, #ef4444 6%, var(--surface));
+}
+
+.danger-zone-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.danger-zone-row-label {
+  font-size: 14px;
+}
+
+.danger-zone-row-tables {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.danger-zone-btn {
+  flex-shrink: 0;
+  padding: 0.4rem 0.9rem;
+  border-radius: 0.4rem;
+  border: 1px solid color-mix(in srgb, #ef4444 50%, var(--border));
+  background: transparent;
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.danger-zone-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, #ef4444 15%, transparent);
+}
+
+.danger-zone-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.danger-zone-btn.is-critical {
+  border-color: #ef4444;
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  font-weight: 600;
+}
+
+.danger-zone-btn.is-critical:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* Résultats */
+.danger-zone-results {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 60%, var(--background));
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.danger-zone-results-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.2rem;
+}
+
+.danger-zone-result-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+}
+
+.danger-zone-result-scope {
+  font-weight: 600;
+  color: #4ade80;
+}
+
+.danger-zone-result-time {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.danger-zone-result-counts {
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 11.5px;
+}
+
+/* Overlay de confirmation */
+.danger-zone-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.danger-zone-dialog {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, #ef4444 40%, var(--border));
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  max-width: 28rem;
+  width: calc(100% - 2rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.danger-zone-dialog-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ef4444;
+  margin: 0;
+}
+
+.danger-zone-dialog-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.danger-zone-confirm-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.danger-zone-confirm-input {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--text);
+  font-size: 14px;
+  font-family: monospace;
+  letter-spacing: 0.05em;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.danger-zone-confirm-input:focus {
+  border-color: #ef4444;
+}
+
+.danger-zone-dialog-error {
+  margin: 0;
+}
+
+.danger-zone-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
 }

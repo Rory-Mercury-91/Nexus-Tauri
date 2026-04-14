@@ -30,6 +30,8 @@ export type ReadingCollectionEntry = {
   addedAt: string;
   hasFamilyOwners: boolean;
   nautiljonNeedsManualImport: boolean;
+  /** Lien Nautiljon défini ou import Nautiljon associé. */
+  hasNautiljonData: boolean;
   malChaptersRead: number;
   malChaptersTotal: number;
   mihonChaptersRead: number;
@@ -433,7 +435,9 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
           .map((entry) => {
             const sourceId = String((entry as { sourceId?: string }).sourceId ?? "").trim();
             if (!sourceId) return "";
-            return sourceNameById.get(sourceId) ?? sourceId;
+            // Si le nom n'est pas résolu (index non rafraîchi ou extension hors Keiyoushi),
+            // on n'expose pas l'ID numérique brut dans les filtres.
+            return sourceNameById.get(sourceId) ?? "";
           })
           .filter((label) => label.length > 0)
       )
@@ -450,10 +454,9 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       : chaptersTotal;
 
     const malMangaNum = Number(row.mal_manga_id ?? 0);
-    const aniMedia =
-      typeof (row as { anilist_media_id?: unknown }).anilist_media_id === "number"
-        ? (row as { anilist_media_id: number }).anilist_media_id
-        : null;
+    const rawAnilistId = (row as Record<string, unknown>).anilist_media_id;
+    const aniMediaNum = rawAnilistId != null ? Number(rawAnilistId) : NaN;
+    const aniMedia = Number.isFinite(aniMediaNum) && aniMediaNum > 0 ? aniMediaNum : null;
     return {
       id: readingId,
       malId: Number.isFinite(malMangaNum) && malMangaNum > 0 ? malMangaNum : 0,
@@ -474,6 +477,10 @@ export async function fetchReadingCollection(supabase: SupabaseClient): Promise<
       addedAt: String(row.created_at),
       hasFamilyOwners,
       nautiljonNeedsManualImport: Boolean(manualOverrides.nautiljon_needs_manual_import ?? false),
+      hasNautiljonData: Boolean(
+        manualOverrides.nautiljon_needs_manual_import ||
+        String(((manualOverrides.links ?? {}) as Record<string, unknown>).nautiljon ?? "").trim()
+      ),
       malChaptersRead: Number.isFinite(malChaptersRead) ? malChaptersRead : 0,
       malChaptersTotal: Number.isFinite(chaptersTotal) ? chaptersTotal : 0,
       mihonChaptersRead,

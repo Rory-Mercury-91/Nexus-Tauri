@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import type { SyncProgressRow, SyncRun } from "@/services/library/syncService";
+import type { SyncProgressRow } from "@/services/library/syncService";
 
 /** Row telle que reçue par Realtime (inclut run_id/user_id absents du type public). */
 export type RealtimeProgressRow = SyncProgressRow & { run_id: string; user_id: string };

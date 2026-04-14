@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AddAnimeModal } from "@/features/library/AddAnimeModal/AddAnimeModal";
 import { ToggleSwitch } from "@/components/common/ToggleSwitch";
 import { PersonalStatusMenu, type StatusOption } from "@/components/library/PersonalStatusMenu";
-import { notifyToast } from "@/lib/toastEvents";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import {
   fetchAnimeCollection,

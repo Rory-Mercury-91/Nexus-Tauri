@@ -27,4 +27,21 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Format objet : Rollup résout lui-même les dépendances transitives
+        // sans risque de dépendances circulaires entre chunks.
+        manualChunks: {
+          "vendor-react":    ["react", "react-dom"],
+          "vendor-router":   ["react-router-dom"],
+          "vendor-supabase": ["@supabase/supabase-js"],
+          "vendor-charts":   ["recharts"],
+          "vendor-icons":    ["lucide-react"],
+        },
+      },
+    },
+    // Silence l'avertissement de taille de chunk (protobufjs/recharts gonflent inévitablement)
+    chunkSizeWarningLimit: 700,
+  },
 }));

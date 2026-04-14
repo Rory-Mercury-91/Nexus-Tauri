@@ -70,6 +70,7 @@ Deno.serve(async (req) => {
       .select("id, status, source, media_type, created_at, started_at")
       .eq("user_id", userId)
       .eq("media_type", mediaType)
+      .eq("source", source)
       .in("status", ["queued", "running"])
       .order("created_at", { ascending: false })
       .limit(1)

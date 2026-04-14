@@ -6,10 +6,13 @@ import { notifyToast } from "@/lib/toastEvents";
 import { listMyFamilies } from "@/services/family/familyService";
 import {
   applyNautiljonImportToReading,
+  createReadingEntryFromNautiljon,
   fetchReadingImportTargets,
   type NautiljonImportEnvelope,
   type ReadingImportTarget,
 } from "@/services/library/nautiljonImportService";
+
+const NEW_ENTRY_ID = "__new__";
 import "./NautiljonImportReceptionModal.css";
 
 type ImportProgressPayload = {
@@ -117,11 +120,15 @@ export function NautiljonImportReceptionModal() {
     }
     return targets.filter((entry) => {
       const ani = entry.anilistMediaId != null ? String(entry.anilistMediaId) : "";
-      return (
+      if (
         entry.title.toLowerCase().includes(normalized) ||
         String(entry.malMangaId).includes(normalized) ||
         (ani.length > 0 && ani.includes(normalized))
-      );
+      ) {
+        return true;
+      }
+      // Recherche étendue sur toutes les variantes de titre (romaji, japonais, synonymes…)
+      return entry.searchAliases.some((alias) => alias.toLowerCase().includes(normalized));
     });
   }, [query, targets]);
 
@@ -136,34 +143,42 @@ export function NautiljonImportReceptionModal() {
     setProgressMessage("");
   }
 
+  const isNewEntry = selectedTargetId === NEW_ENTRY_ID;
+
   async function handleApplyImport() {
-    if (!pending || !selectedTargetId || !session?.user?.id) {
-      return;
-    }
+    if (!pending || !selectedTargetId || !session?.user?.id) return;
     setApplying(true);
     try {
       const supabase = getSupabaseClient();
       const families = await listMyFamilies(supabase);
       const familyId = families[0]?.id ?? null;
-      const result = await applyNautiljonImportToReading(supabase, selectedTargetId, pending, {
-        familyId,
-      });
-      await clearPendingAndClose();
-      notifyToast({
-        kind: "success",
-        message:
-          result.volumesUpserted > 0
+
+      if (isNewEntry) {
+        const result = await createReadingEntryFromNautiljon(supabase, pending, { familyId });
+        await clearPendingAndClose();
+        notifyToast({
+          kind: "success",
+          message: result.volumesUpserted > 0
+            ? `Nouvelle fiche créée (${result.volumesUpserted} tome(s) importé(s)).`
+            : "Nouvelle fiche lecture créée depuis Nautiljon.",
+        });
+      } else {
+        const result = await applyNautiljonImportToReading(supabase, selectedTargetId, pending, { familyId });
+        await clearPendingAndClose();
+        notifyToast({
+          kind: "success",
+          message: result.volumesUpserted > 0
             ? `Import VF appliqué (${result.volumesUpserted} tome(s) mis à jour).`
             : "Import VF appliqué à la fiche lecture.",
-      });
+        });
+      }
       window.dispatchEvent(new Event("focus"));
     } catch (error) {
       notifyToast({
         kind: "error",
-        message:
-          error instanceof Error
-            ? `Échec de l'import Nautiljon: ${error.message}`
-            : "Échec de l'import Nautiljon.",
+        message: error instanceof Error
+          ? `Échec de l'import Nautiljon : ${error.message}`
+          : "Échec de l'import Nautiljon.",
       });
     } finally {
       setApplying(false);
@@ -224,6 +239,10 @@ export function NautiljonImportReceptionModal() {
               disabled={loadingTargets || applying || !session?.user?.id}
             >
               <option value="">Sélectionner une fiche…</option>
+              {/* Option création directe */}
+              <option value={NEW_ENTRY_ID}>
+                ✦ Créer une nouvelle fiche depuis Nautiljon
+              </option>
               {filteredTargets.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {`${entry.title} (MAL ${entry.malMangaId || "—"}${entry.anilistMediaId != null ? ` · AniList ${entry.anilistMediaId}` : ""})`}
@@ -231,6 +250,13 @@ export function NautiljonImportReceptionModal() {
               ))}
             </select>
           </label>
+          {/* Info contextuelle selon le choix */}
+          {isNewEntry ? (
+            <p className="nautiljon-import-new-hint">
+              Une nouvelle fiche sera créée avec un identifiant interne Nexus. Elle pourra être liée à MAL
+              ou AniList ultérieurement via une synchronisation.
+            </p>
+          ) : null}
         </div>
 
         <div className="nautiljon-import-actions">
@@ -246,7 +272,11 @@ export function NautiljonImportReceptionModal() {
             disabled={!selectedTargetId || applying || !session?.user?.id}
             onClick={() => void handleApplyImport()}
           >
-            {applying ? "Application…" : "Appliquer l'import VF"}
+            {applying
+              ? "Application…"
+              : isNewEntry
+                ? "Créer la fiche"
+                : "Appliquer l'import VF"}
           </button>
         </div>
       </div>

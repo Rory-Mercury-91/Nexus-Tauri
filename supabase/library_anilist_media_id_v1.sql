@@ -8,13 +8,13 @@ alter table public.library_reading add column if not exists anilist_media_id int
 
 alter table public.library_reading drop constraint if exists library_reading_user_mal_unique;
 
+-- Index non-partiel : PostgreSQL autorise plusieurs NULL distincts, pas de conflit.
+-- ON CONFLICT (user_id, mal_manga_id) fonctionne uniquement avec un index non-partiel.
 create unique index if not exists library_reading_user_mal_unique
-  on public.library_reading (user_id, mal_manga_id)
-  where mal_manga_id is not null;
+  on public.library_reading (user_id, mal_manga_id);
 
 create unique index if not exists library_reading_user_anilist_unique
-  on public.library_reading (user_id, anilist_media_id)
-  where anilist_media_id is not null;
+  on public.library_reading (user_id, anilist_media_id);
 
 alter table public.library_reading alter column mal_manga_id drop not null;
 
@@ -38,13 +38,12 @@ alter table public.library_anime add column if not exists anilist_media_id integ
 
 alter table public.library_anime drop constraint if exists library_anime_user_mal_unique;
 
+-- Index non-partiel : compatible ON CONFLICT (user_id, mal_id).
 create unique index if not exists library_anime_user_mal_unique
-  on public.library_anime (user_id, mal_id)
-  where mal_id is not null;
+  on public.library_anime (user_id, mal_id);
 
 create unique index if not exists library_anime_user_anilist_unique
-  on public.library_anime (user_id, anilist_media_id)
-  where anilist_media_id is not null;
+  on public.library_anime (user_id, anilist_media_id);
 
 alter table public.library_anime alter column mal_id drop not null;
 

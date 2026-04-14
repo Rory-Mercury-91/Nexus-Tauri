@@ -5,6 +5,7 @@ import { notifyToast } from "@/lib/toastEvents";
 import { useSyncProgress } from "@/contexts/SyncProgressContext";
 import { tickSyncWorker } from "@/services/library/syncService";
 import type { SyncMediaType, SyncRun, SyncProgressRow } from "@/services/library/syncService";
+import type { MihonImportProgress } from "@/services/library/mihonBackupImportService";
 import "./SyncProgressSidebar.css";
 
 const STALL_AFTER_MS = 120_000;
@@ -139,6 +140,53 @@ function getCurrentStage(stages: SyncProgressRow[]): SyncProgressRow | null {
     const lt = latest.updated_at ? new Date(latest.updated_at).getTime() : 0;
     return t > lt ? s : latest;
   });
+}
+
+function MihonImportBlock({ progress }: { progress: MihonImportProgress }) {
+  const pct =
+    progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+
+  return (
+    <div className="sync-sidebar-run-block is-active">
+      <div className="sync-sidebar-run-header">
+        <div className="sync-sidebar-run-header-left">
+          <span className="sync-sidebar-freshness-dot is-running" aria-hidden />
+          <span className="sync-sidebar-run-label">Import Mihon</span>
+          <span className="sync-sidebar-freshness-pill is-running">En cours</span>
+        </div>
+        <div className="sync-sidebar-run-header-right">
+          {progress.total > 0 && (
+            <span className="sync-sidebar-run-eta">{pct}%</span>
+          )}
+        </div>
+      </div>
+
+      {progress.total === 0 ? (
+        <div className="sync-sidebar-starting">
+          <span className="sync-sidebar-starting-spinner" aria-hidden />
+          <span>Décodage du backup…</span>
+        </div>
+      ) : (
+        <article className="sync-sidebar-stage">
+          <div className="sync-sidebar-stage-head">
+            <span className="sync-sidebar-stage-name">Entrées</span>
+            <span>
+              {progress.current}/{progress.total} — ✚{progress.created} ↺{progress.updated}
+              {progress.errors > 0 ? ` ✕${progress.errors}` : ""}
+            </span>
+          </div>
+          <div className="sync-sidebar-bar">
+            <div style={{ width: `${pct}%` }} />
+          </div>
+          {progress.item ? (
+            <small className="sync-sidebar-item-label" title={progress.item}>
+              {progress.item}
+            </small>
+          ) : null}
+        </article>
+      )}
+    </div>
+  );
 }
 
 type RunBlockProps = {
@@ -291,6 +339,8 @@ export function SyncProgressSidebar() {
     startFullSync,
     refresh,
     cancelRun,
+    mihonImportActive,
+    mihonImportProgress,
   } = useSyncProgress();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -407,6 +457,9 @@ export function SyncProgressSidebar() {
             onSync={() => void handleSync("reading")}
             syncLoading={syncingReading || loading}
           />
+          {mihonImportActive && mihonImportProgress ? (
+            <MihonImportBlock progress={mihonImportProgress} />
+          ) : null}
         </div>
       )}
     </section>

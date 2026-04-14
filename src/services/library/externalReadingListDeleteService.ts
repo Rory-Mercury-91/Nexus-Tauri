@@ -31,10 +31,17 @@ export async function removeFromExternalList(
     }
     return { ok: true };
   } catch (e) {
-    return {
-      ok: false,
-      error: e instanceof Error ? e.message : "Suppression impossible.",
-    };
+    const msg = e instanceof Error ? e.message : "";
+    // L'entrée est déjà absente de la liste distante → succès idempotent.
+    if (
+      msg.includes("404") ||
+      msg.toLowerCase().includes("introuvable") ||
+      msg.toLowerCase().includes("not found") ||
+      msg.toLowerCase().includes("already")
+    ) {
+      return { ok: true };
+    }
+    return { ok: false, error: msg || "Suppression impossible." };
   }
 }
 
